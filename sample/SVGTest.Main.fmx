@@ -1,0 +1,51 @@
+object FormMain: TFormMain
+  Left = 0
+  Top = 0
+  Caption = 'SVGTest'
+  ClientHeight = 488
+  ClientWidth = 1020
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop]
+  OnCreate = FormCreate
+  DesignerMasterStyle = 0
+  object Rectangle1: TRectangle
+    Align = Client
+    Fill.Color = claWhite
+    Margins.Left = 20.000000000000000000
+    Margins.Top = 20.000000000000000000
+    Margins.Right = 20.000000000000000000
+    Margins.Bottom = 20.000000000000000000
+    Size.Width = 451.000000000000000000
+    Size.Height = 448.000000000000000000
+    Size.PlatformDefault = False
+  end
+  object MemoSVG: TMemo
+    Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+    DataDetectorTypes = []
+    StyledSettings = [Size, Style, FontColor]
+    TextSettings.Font.Family = 'Consolas'
+    TextSettings.WordWrap = True
+    TextPrompt = 'Paste SVG here'
+    OnChange = MemoSVGChange
+    OnChangeTracking = MemoSVGChange
+    Align = Left
+    Size.Width = 529.000000000000000000
+    Size.Height = 488.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 0
+    Viewport.Width = 525.000000000000000000
+    Viewport.Height = 484.000000000000000000
+  end
+  object LayoutSVG: TLayout
+    Align = Client
+    Margins.Left = 20.000000000000000000
+    Margins.Top = 20.000000000000000000
+    Margins.Right = 20.000000000000000000
+    Margins.Bottom = 20.000000000000000000
+    Size.Width = 451.000000000000000000
+    Size.Height = 448.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 1
+  end
+end
