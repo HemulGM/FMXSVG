@@ -18,6 +18,8 @@ type
     procedure RenderEndpointMarker(const Canvas: TCanvas; Element: TSvgElement;
       const ViewMatrix: TSvgMatrix; const MarkerID: string; const FromPoint,
       ToPoint: TPointF; IsStart: Boolean);
+    procedure RenderPattern(const Canvas: TCanvas; Pattern: TSvgPattern;
+      Element: TSvgElement; const ViewMatrix: TSvgMatrix; const Bounds: TRectF);
     procedure RenderElement(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
   public
     constructor Create;
@@ -35,6 +37,114 @@ function AlphaColorWithOpacity(Color: TAlphaColor; Opacity: Single): TAlphaColor
 begin
   var A := Round(TAlphaColorRec(Color).A * EnsureRange(Opacity, 0, 1));
   Result := (Color and $00FFFFFF) or (TAlphaColor(A) shl 24);
+end;
+
+function InvertMatrix(const Matrix: TSvgMatrix; out Inverse: TSvgMatrix): Boolean;
+begin
+  var Determinant := Matrix.A * Matrix.D - Matrix.B * Matrix.C;
+  Result := Abs(Determinant) > 0.00001;
+  if not Result then
+    Exit;
+  Inverse.A := Matrix.D / Determinant;
+  Inverse.B := -Matrix.B / Determinant;
+  Inverse.C := -Matrix.C / Determinant;
+  Inverse.D := Matrix.A / Determinant;
+  Inverse.E := -(Inverse.A * Matrix.E + Inverse.C * Matrix.F);
+  Inverse.F := -(Inverse.B * Matrix.E + Inverse.D * Matrix.F);
+end;
+
+procedure TSvgRenderer.RenderPattern(const Canvas: TCanvas; Pattern: TSvgPattern;
+  Element: TSvgElement; const ViewMatrix: TSvgMatrix; const Bounds: TRectF);
+begin
+  if (Pattern.Width <= 0) or (Pattern.Height <= 0) then
+    Exit;
+
+  var PatternBitmap := TBitmap.Create(FBitmap.Width, FBitmap.Height);
+  try
+    var ContentMatrix := ViewMatrix * Element.Matrix;
+    var Inverse: TSvgMatrix;
+    var BoundsMatrix := ContentMatrix;
+    if Pattern.UnitsUserSpace then
+      BoundsMatrix := BoundsMatrix * Pattern.Matrix;
+    if not InvertMatrix(BoundsMatrix, Inverse) then
+      Exit;
+    var P1 := Inverse.TransformPoint(PointF(Bounds.Left, Bounds.Top));
+    var P2 := Inverse.TransformPoint(PointF(Bounds.Right, Bounds.Top));
+    var P3 := Inverse.TransformPoint(PointF(Bounds.Left, Bounds.Bottom));
+    var P4 := Inverse.TransformPoint(PointF(Bounds.Right, Bounds.Bottom));
+    var MinX := Min(Min(P1.X, P2.X), Min(P3.X, P4.X));
+    var MaxX := Max(Max(P1.X, P2.X), Max(P3.X, P4.X));
+    var MinY := Min(Min(P1.Y, P2.Y), Min(P3.Y, P4.Y));
+    var MaxY := Max(Max(P1.Y, P2.Y), Max(P3.Y, P4.Y));
+    var PatternMatrix := ContentMatrix * Pattern.Matrix;
+    var FirstX, LastX, FirstY, LastY: Integer;
+    if Pattern.UnitsUserSpace then
+    begin
+      FirstX := Floor(MinX / Pattern.Width) - 1;
+      LastX := Ceil(MaxX / Pattern.Width) + 1;
+      FirstY := Floor(MinY / Pattern.Height) - 1;
+      LastY := Ceil(MaxY / Pattern.Height) + 1;
+    end
+    else
+    begin
+      // The definition's coordinate system is normalized to the painted object's bounds.
+      PatternMatrix := ContentMatrix * TSvgMatrix.Translation(MinX, MinY) *
+        TSvgMatrix.Scaling(MaxX - MinX, MaxY - MinY) * Pattern.Matrix;
+      FirstX := -1;
+      LastX := Ceil(1 / Pattern.Width) + 1;
+      FirstY := -1;
+      LastY := Ceil(1 / Pattern.Height) + 1;
+    end;
+
+    PatternBitmap.Canvas.BeginScene;
+    try
+      PatternBitmap.Canvas.Clear(TAlphaColorRec.Null);
+      for var TileY := FirstY to LastY do
+        for var TileX := FirstX to LastX do
+          for var PatternElement in Pattern.Elements do
+          begin
+            if not PatternElement.Style.Visible then
+              Continue;
+            var TilePath := TPathData.Create;
+            try
+              PatternElement.Path.AppendTo(TilePath,
+                PatternMatrix * TSvgMatrix.Translation(
+                  TileX * Pattern.Width, TileY * Pattern.Height) * PatternElement.Matrix);
+              var Opacity := EnsureRange(PatternElement.Style.Opacity, 0, 1);
+              if PatternElement.Style.Fill.Enabled then
+              begin
+                PatternBitmap.Canvas.Fill.Kind := TBrushKind.Solid;
+                PatternBitmap.Canvas.Fill.Color := AlphaColorWithOpacity(
+                  PatternElement.Style.Fill.Color, PatternElement.Style.FillOpacity);
+                PatternBitmap.Canvas.FillPath(TilePath, Opacity);
+              end;
+              if PatternElement.Style.Stroke.Enabled and (PatternElement.Style.StrokeWidth > 0) then
+              begin
+                var Stroke := TStrokeBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
+                try
+                  Stroke.Color := AlphaColorWithOpacity(PatternElement.Style.Stroke.Color,
+                    PatternElement.Style.StrokeOpacity);
+                  Stroke.Thickness := PatternElement.Style.StrokeWidth;
+                  Stroke.Cap := PatternElement.Style.StrokeCap;
+                  Stroke.Join := PatternElement.Style.StrokeJoin;
+                  PatternBitmap.Canvas.DrawPath(TilePath, Opacity, Stroke);
+                finally
+                  Stroke.Free;
+                end;
+              end;
+            finally
+              TilePath.Free;
+            end;
+          end;
+    finally
+      PatternBitmap.Canvas.EndScene;
+    end;
+    Canvas.Fill.Kind := TBrushKind.Bitmap;
+    Canvas.Fill.Bitmap.Bitmap.Assign(PatternBitmap);
+    Canvas.Fill.Bitmap.WrapMode := TWrapMode.TileOriginal;
+  finally
+    PatternBitmap.Free;
+  end;
 end;
 
 procedure TSvgRenderer.RenderMarker(const Canvas: TCanvas; Marker: TSvgMarker;
@@ -291,7 +401,14 @@ begin
       var Brush := TBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
       try
         var Definition: TSvgGradient;
-        if not Element.Style.Fill.GradientID.IsEmpty and FDocument.Gradients.TryGetValue(Element.Style.Fill.GradientID, Definition) then
+        var Pattern: TSvgPattern;
+        if not Element.Style.Fill.PatternID.IsEmpty and
+          FDocument.Patterns.TryGetValue(Element.Style.Fill.PatternID, Pattern) then
+        begin
+          RenderPattern(Canvas, Pattern, Element, ViewMatrix, Path.GetBounds);
+          Canvas.FillPath(Path, Opacity);
+        end
+        else if not Element.Style.Fill.GradientID.IsEmpty and FDocument.Gradients.TryGetValue(Element.Style.Fill.GradientID, Definition) then
         begin
           var Bounds := Path.GetBounds;
           Brush.Kind := TBrushKind.Gradient;

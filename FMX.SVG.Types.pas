@@ -105,6 +105,16 @@ type
     destructor Destroy; override;
   end;
 
+  TSvgPattern = class
+  public
+    Width, Height: Single;
+    UnitsUserSpace: Boolean;
+    Matrix: TSvgMatrix;
+    Elements: TObjectList<TSvgElement>;
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   TSvgMarker = class
   public
     Width, Height, RefX, RefY: Single;
@@ -464,6 +474,24 @@ end;
 destructor TSvgElement.Destroy;
 begin
   Path.Free;
+  inherited;
+end;
+
+{ TSvgPattern }
+
+constructor TSvgPattern.Create;
+begin
+  inherited;
+  Width := 0;
+  Height := 0;
+  UnitsUserSpace := False;
+  Matrix := TSvgMatrix.Identity;
+  Elements := TObjectList<TSvgElement>.Create(True);
+end;
+
+destructor TSvgPattern.Destroy;
+begin
+  Elements.Free;
   inherited;
 end;
 

@@ -57,6 +57,7 @@ type
     FElements: TObjectList<TSvgElement>;
     FClipPaths: TObjectDictionary<string, TSvgPath>;
     FGradients: TObjectDictionary<string, TSvgGradient>;
+    FPatterns: TObjectDictionary<string, TSvgPattern>;
     FMarkers: TObjectDictionary<string, TSvgMarker>;
     FSymbols: TObjectDictionary<string, TSvgSymbol>;
     FClassStyles: TStringList;
@@ -65,7 +66,8 @@ type
     FViewBox: TRectF;
     FHasViewBox: Boolean;
     procedure ParseNode(const Node: IXMLNode; const ParentMatrix: TSvgMatrix; const ParentStyle: TSvgStyle);
-    procedure ParseShape(const Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
+    procedure ParseShape(const Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle;
+      const Dest: TObjectList<TSvgElement>);
     function ParseStyle(const Node: IXMLNode; const Parent: TSvgStyle): TSvgStyle;
     procedure ApplyStyleDeclaration(const Declaration: string; var Style: TSvgStyle);
     procedure ParseCss(const Text: string);
@@ -81,6 +83,7 @@ type
     procedure ParseClipPath(Node: IXMLNode; const Matrix: TSvgMatrix);
     procedure ParseLinearGradient(Node: IXMLNode);
     procedure ParseRadialGradient(Node: IXMLNode);
+    procedure ParsePattern(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
     procedure ParseMarker(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
     procedure ParseSymbol(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
     procedure ParseUse(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
@@ -97,6 +100,7 @@ type
     property Elements: TObjectList<TSvgElement> read FElements;
     property ClipPaths: TObjectDictionary<string, TSvgPath> read FClipPaths;
     property Gradients: TObjectDictionary<string, TSvgGradient> read FGradients;
+    property Patterns: TObjectDictionary<string, TSvgPattern> read FPatterns;
     property Markers: TObjectDictionary<string, TSvgMarker> read FMarkers;
     property Symbols: TObjectDictionary<string, TSvgSymbol> read FSymbols;
     property Width: Single read FWidth;
@@ -712,6 +716,7 @@ begin
   FElements := TObjectList<TSvgElement>.Create(True);
   FClipPaths := TObjectDictionary<string, TSvgPath>.Create([doOwnsValues]);
   FGradients := TObjectDictionary<string, TSvgGradient>.Create([doOwnsValues]);
+  FPatterns := TObjectDictionary<string, TSvgPattern>.Create([doOwnsValues]);
   FMarkers := TObjectDictionary<string, TSvgMarker>.Create([doOwnsValues]);
   FSymbols := TObjectDictionary<string, TSvgSymbol>.Create([doOwnsValues]);
   FClassStyles := TStringList.Create;
@@ -722,6 +727,7 @@ destructor TSvgDocument.Destroy;
 begin
   FClipPaths.Free;
   FGradients.Free;
+  FPatterns.Free;
   FMarkers.Free;
   FSymbols.Free;
   FClassStyles.Free;
@@ -734,6 +740,7 @@ begin
   FElements.Clear;
   FClipPaths.Clear;
   FGradients.Clear;
+  FPatterns.Clear;
   FMarkers.Clear;
   FSymbols.Clear;
   FClassStyles.Clear;
@@ -857,6 +864,7 @@ begin
     begin
       Style.Fill.Enabled := not SameText(Value, 'none');
       Style.Fill.GradientID := GradientIDFromPaint(Value);
+      Style.Fill.PatternID := Style.Fill.GradientID;
       if Style.Fill.Enabled and Style.Fill.GradientID.IsEmpty then
         Style.Fill.Color := ParseColor(Value, Style.Fill.Color);
     end
@@ -947,6 +955,7 @@ begin
   begin
     Result.Fill.Enabled := not SameText(S.Trim, 'none');
     Result.Fill.GradientID := GradientIDFromPaint(S);
+    Result.Fill.PatternID := Result.Fill.GradientID;
     if Result.Fill.Enabled and Result.Fill.GradientID.IsEmpty then
       Result.Fill.Color := ParseColor(S, Result.Fill.Color);
   end;
@@ -1001,6 +1010,7 @@ begin
       begin
         Result.Fill.Enabled := not SameText(Value, 'none');
         Result.Fill.GradientID := GradientIDFromPaint(Value);
+        Result.Fill.PatternID := Result.Fill.GradientID;
         if Result.Fill.Enabled and Result.Fill.GradientID.IsEmpty then
           Result.Fill.Color := ParseColor(Value, Result.Fill.Color);
       end
@@ -1335,7 +1345,8 @@ begin
   Element.TextAnchor := Attr(Node, 'text-anchor', 'start').ToLower;
 end;
 
-procedure TSvgDocument.ParseShape(const Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
+procedure TSvgDocument.ParseShape(const Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle;
+  const Dest: TObjectList<TSvgElement>);
 begin
   var Name := Node.NodeName.ToLower;
   if Name = 'clippath' then
@@ -1370,7 +1381,7 @@ begin
     ParsePoly(Node, Element, True);
   if Name = 'text' then
     ParseText(Node, Element);
-  FElements.Add(Element);
+  Dest.Add(Element);
 end;
 
 procedure TSvgDocument.ParseMarker(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
@@ -1672,6 +1683,58 @@ begin
   end;
 end;
 
+procedure TSvgDocument.ParsePattern(Node: IXMLNode; const Matrix: TSvgMatrix;
+  const Style: TSvgStyle);
+begin
+  var ID := Attr(Node, 'id');
+  if ID.IsEmpty then
+    Exit;
+
+  var Definition := TSvgPattern.Create;
+  try
+    Definition.UnitsUserSpace := SameText(Attr(Node, 'patternUnits'), 'userSpaceOnUse');
+    var ReferenceWidth := FWidth;
+    var ReferenceHeight := FHeight;
+    if not Definition.UnitsUserSpace then
+    begin
+      ReferenceWidth := 1;
+      ReferenceHeight := 1;
+    end;
+    Definition.Width := LengthAttr(Node, 'width', ReferenceWidth);
+    Definition.Height := LengthAttr(Node, 'height', ReferenceHeight);
+    if (Definition.Width <= 0) or (Definition.Height <= 0) then
+      Exit;
+    Definition.Matrix := Matrix * ParseTransform(Attr(Node, 'patternTransform'));
+    var SavedWidth := FWidth;
+    var SavedHeight := FHeight;
+    if not Definition.UnitsUserSpace then
+    begin
+      // Pattern content in objectBoundingBox units is normalized to 0..1.
+      FWidth := 1;
+      FHeight := 1;
+    end;
+    try
+      for var I := 0 to Node.ChildNodes.Count - 1 do
+      begin
+        var Child := Node.ChildNodes[I];
+        var ChildStyle := ParseStyle(Child, Style);
+        var ChildMatrix := ParseTransform(Attr(Child, 'transform'));
+        ParseShape(Child, ChildMatrix, ChildStyle, Definition.Elements);
+      end;
+    finally
+      FWidth := SavedWidth;
+      FHeight := SavedHeight;
+    end;
+    if Definition.Elements.Count > 0 then
+    begin
+      FPatterns.AddOrSetValue(ID, Definition);
+      Definition := nil;
+    end;
+  finally
+    Definition.Free;
+  end;
+end;
+
 procedure TSvgDocument.ParseNode(const Node: IXMLNode; const ParentMatrix: TSvgMatrix; const ParentStyle: TSvgStyle);
 begin
   var Style := ParseStyle(Node, ParentStyle);
@@ -1685,6 +1748,11 @@ begin
   if Name = 'radialgradient' then
   begin
     ParseRadialGradient(Node);
+    Exit;
+  end;
+  if Name = 'pattern' then
+  begin
+    ParsePattern(Node, Matrix, Style);
     Exit;
   end;
   if Name = 'marker' then
@@ -1713,6 +1781,7 @@ begin
       if SameText(Node.ChildNodes[i].NodeName, 'clippath') or
         SameText(Node.ChildNodes[i].NodeName, 'lineargradient') or
         SameText(Node.ChildNodes[i].NodeName, 'radialgradient') or
+        SameText(Node.ChildNodes[i].NodeName, 'pattern') or
         SameText(Node.ChildNodes[i].NodeName, 'marker') or
         SameText(Node.ChildNodes[i].NodeName, 'symbol') then
         ParseNode(Node.ChildNodes[i], Matrix, Style);
@@ -1745,7 +1814,7 @@ begin
       ParseNode(Node.ChildNodes[i], Matrix, Style);
     Exit;
   end;
-  ParseShape(Node, Matrix, Style);
+  ParseShape(Node, Matrix, Style, FElements);
 end;
 
 procedure TSvgDocument.LoadFromString(const S: string);
