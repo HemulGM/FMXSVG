@@ -58,6 +58,7 @@ type
   TSvgFillRule = (sffNonZero, sffEvenOdd);
 
   TSvgGradientKind = (sgLinear, sgRadial);
+  TSvgGradientSpread = (sgsPad, sgsRepeat, sgsReflect);
 
   TSvgPaint = record
     Enabled: Boolean;
@@ -68,6 +69,7 @@ type
   TSvgGradient = class
   public
     Kind: TSvgGradientKind;
+    Spread: TSvgGradientSpread;
     UnitsUserSpace: Boolean;
     X1, Y1, X2, Y2, Radius: Single;
     Matrix: TSvgMatrix;
@@ -412,6 +414,7 @@ begin
   Y2 := 0;
   Radius := 0.5;
   Kind := sgLinear;
+  Spread := sgsPad;
   UnitsUserSpace := False;
   Matrix := TSvgMatrix.Identity;
   Gradient := TGradient.Create;

@@ -1583,6 +1583,10 @@ begin
   var Definition := TSvgGradient.Create;
   try
     Definition.UnitsUserSpace := SameText(Attr(Node, 'gradientUnits'), 'userSpaceOnUse');
+    if SameText(Attr(Node, 'spreadMethod'), 'repeat') then
+      Definition.Spread := sgsRepeat
+    else if SameText(Attr(Node, 'spreadMethod'), 'reflect') then
+      Definition.Spread := sgsReflect;
     var UnitWidth := 1.0;
     var UnitHeight := 1.0;
     if Definition.UnitsUserSpace then
@@ -1628,6 +1632,10 @@ begin
   try
     Definition.Kind := sgRadial;
     Definition.UnitsUserSpace := SameText(Attr(Node, 'gradientUnits'), 'userSpaceOnUse');
+    if SameText(Attr(Node, 'spreadMethod'), 'repeat') then
+      Definition.Spread := sgsRepeat
+    else if SameText(Attr(Node, 'spreadMethod'), 'reflect') then
+      Definition.Spread := sgsReflect;
     var UnitWidth := 1.0;
     var UnitHeight := 1.0;
     if Definition.UnitsUserSpace then

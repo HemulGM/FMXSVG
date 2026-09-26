@@ -332,19 +332,58 @@ begin
             end;
           end;
           Brush.Gradient.Points.Clear;
-          for var I := 0 to Definition.Gradient.Points.Count - 1 do
+          if (Definition.Kind = sgLinear) and not Definition.UnitsUserSpace and
+            (Definition.Spread <> sgsPad) then
           begin
-            var SourceIndex := I;
-            if Definition.Kind = sgRadial then
-              SourceIndex := Definition.Gradient.Points.Count - 1 - I;
-            var Source := Definition.Gradient.Points[SourceIndex];
-            var Target := TGradientPoint(Brush.Gradient.Points.Add);
-            if Definition.Kind = sgRadial then
-              Target.Offset := 1 - Source.Offset
-            else
-              Target.Offset := Source.Offset;
-            Target.Color := AlphaColorWithOpacity(Source.Color, Element.Style.FillOpacity);
+            var DX := Definition.X2 - Definition.X1;
+            var DY := Definition.Y2 - Definition.Y1;
+            var LengthSquared := Sqr(DX) + Sqr(DY);
+            if LengthSquared > 0.000001 then
+            begin
+              var MinT := Min(Min((-Definition.X1 * DX - Definition.Y1 * DY) / LengthSquared,
+                ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
+                Min((-Definition.X1 * DX + (1 - Definition.Y1) * DY) / LengthSquared,
+                ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
+              var MaxT := Max(Max((-Definition.X1 * DX - Definition.Y1 * DY) / LengthSquared,
+                ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
+                Max((-Definition.X1 * DX + (1 - Definition.Y1) * DY) / LengthSquared,
+                ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
+              var Range := MaxT - MinT;
+              Brush.Gradient.StartPosition.Point := Definition.Matrix.TransformPoint(
+                PointF(Definition.X1 + DX * MinT, Definition.Y1 + DY * MinT));
+              Brush.Gradient.StopPosition.Point := Definition.Matrix.TransformPoint(
+                PointF(Definition.X1 + DX * MaxT, Definition.Y1 + DY * MaxT));
+              for var Cycle := Floor(MinT) to Ceil(MaxT) do
+                for var I := 0 to Definition.Gradient.Points.Count - 1 do
+                begin
+                  var SourceIndex := I;
+                  var Position := Definition.Gradient.Points[I].Offset;
+                  if (Definition.Spread = sgsReflect) and Odd(Cycle) then
+                  begin
+                    SourceIndex := Definition.Gradient.Points.Count - 1 - I;
+                    Position := 1 - Definition.Gradient.Points[SourceIndex].Offset;
+                  end;
+                  var Target := TGradientPoint(Brush.Gradient.Points.Add);
+                  Target.Offset := (Cycle + Position - MinT) / Range;
+                  Target.Color := AlphaColorWithOpacity(
+                    Definition.Gradient.Points[SourceIndex].Color, Element.Style.FillOpacity);
+                end;
+            end;
           end;
+          if Brush.Gradient.Points.Count = 0 then
+            for var I := 0 to Definition.Gradient.Points.Count - 1 do
+            begin
+              var SourceIndex := I;
+              if Definition.Kind = sgRadial then
+                SourceIndex := Definition.Gradient.Points.Count - 1 - I;
+              var Source := Definition.Gradient.Points[SourceIndex];
+              var Target := TGradientPoint(Brush.Gradient.Points.Add);
+              if Definition.Kind = sgRadial then
+                Target.Offset := 1 - Source.Offset
+              else
+                Target.Offset := Source.Offset;
+              Target.Color := AlphaColorWithOpacity(Source.Color, Element.Style.FillOpacity);
+            end;
           Canvas.FillPath(Path, Opacity, Brush);
         end
         else if Element.Style.Fill.GradientID.IsEmpty then
