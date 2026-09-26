@@ -48,6 +48,33 @@ begin
     Result := 1;
 end;
 
+procedure ObjectBoundingBoxLinearGradientPositions(const Definition: TSvgGradient;
+  const Bounds: TRectF; out StartPosition, StopPosition: TPointF);
+begin
+  StartPosition := Definition.Matrix.TransformPoint(
+    PointF(Definition.X1, Definition.Y1));
+  StopPosition := Definition.Matrix.TransformPoint(
+    PointF(Definition.X2, Definition.Y2));
+
+  { SVG evaluates an objectBoundingBox gradient in normalized bounding-box
+    coordinates.  FMX instead projects the gradient after it has stretched
+    those coordinates to the path bounds.  On a wide rectangle that makes
+    (0, 0) -> (1, 1) appear almost horizontal.  Convert the two points so
+    FMX's projection produces the same normalized-coordinate interpolation. }
+  var DX := StopPosition.X - StartPosition.X;
+  var DY := StopPosition.Y - StartPosition.Y;
+  var GradientLengthSquared := Sqr(DX) + Sqr(DY);
+  var BoundsWidth := Max(Bounds.Width, 0.0001);
+  var BoundsHeight := Max(Bounds.Height, 0.0001);
+  var MetricLengthSquared := Sqr(DX / BoundsWidth) + Sqr(DY / BoundsHeight);
+  if MetricLengthSquared > 0.000001 then
+  begin
+    var Scale := GradientLengthSquared / MetricLengthSquared;
+    StopPosition.X := StartPosition.X + DX * Scale / Sqr(BoundsWidth);
+    StopPosition.Y := StartPosition.Y + DY * Scale / Sqr(BoundsHeight);
+  end;
+end;
+
 function ResolveSvgFontFamily(const Family: string): string;
 var
   Value: string;
@@ -746,8 +773,11 @@ begin
             end
             else
             begin
-              Brush.Gradient.StartPosition.Point := Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
-              Brush.Gradient.StopPosition.Point := Definition.Matrix.TransformPoint(PointF(Definition.X2, Definition.Y2));
+              var StartPosition, StopPosition: TPointF;
+              ObjectBoundingBoxLinearGradientPositions(Definition, Bounds,
+                StartPosition, StopPosition);
+              Brush.Gradient.StartPosition.Point := StartPosition;
+              Brush.Gradient.StopPosition.Point := StopPosition;
             end;
           end;
           Brush.Gradient.Points.Clear;
@@ -871,10 +901,11 @@ begin
             end
             else
             begin
-              Stroke.Gradient.StartPosition.Point :=
-                Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
-              Stroke.Gradient.StopPosition.Point :=
-                Definition.Matrix.TransformPoint(PointF(Definition.X2, Definition.Y2));
+              var StartPosition, StopPosition: TPointF;
+              ObjectBoundingBoxLinearGradientPositions(Definition, Bounds,
+                StartPosition, StopPosition);
+              Stroke.Gradient.StartPosition.Point := StartPosition;
+              Stroke.Gradient.StopPosition.Point := StopPosition;
             end;
           end;
           Stroke.Gradient.Points.Clear;
