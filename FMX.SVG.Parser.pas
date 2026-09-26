@@ -66,8 +66,7 @@ type
     FViewBox: TRectF;
     FHasViewBox: Boolean;
     procedure ParseNode(const Node: IXMLNode; const ParentMatrix: TSvgMatrix; const ParentStyle: TSvgStyle);
-    procedure ParseShape(const Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle;
-      const Dest: TObjectList<TSvgElement>);
+    procedure ParseShape(const Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle; const Dest: TObjectList<TSvgElement>);
     function ParseStyle(const Node: IXMLNode; const Parent: TSvgStyle): TSvgStyle;
     procedure ApplyStyleDeclaration(const Declaration: string; var Style: TSvgStyle);
     procedure ParseCss(const Text: string);
@@ -915,7 +914,38 @@ begin
       Style.DashArray := nil;
       while Numbers.ReadNumber(Number) do
         Style.DashArray := Style.DashArray + [Number];
-    end;
+    end
+    else if Name = 'font-family' then
+      Style.FontFamily := Value.Trim(['''', '"'])
+    else if Name = 'font-size' then
+      Style.FontSize := TSvgLength.Parse(Value, Style.FontSize).Resolve(16, Style.FontSize)
+    else if Name = 'font-weight' then
+    begin
+      if SameText(Value, 'bold') or (ParseFloat(Value, 400) >= 600) then
+        Include(Style.FontStyle, TFontStyle.fsBold)
+      else
+        Exclude(Style.FontStyle, TFontStyle.fsBold);
+    end
+    else if Name = 'font-style' then
+    begin
+      if SameText(Value, 'italic') or SameText(Value, 'oblique') then
+        Include(Style.FontStyle, TFontStyle.fsItalic)
+      else
+        Exclude(Style.FontStyle, TFontStyle.fsItalic);
+    end
+    else if Name = 'text-decoration' then
+    begin
+      if Value.ToLower.Contains('underline') then
+        Include(Style.FontStyle, TFontStyle.fsUnderline)
+      else
+        Exclude(Style.FontStyle, TFontStyle.fsUnderline);
+      if Value.ToLower.Contains('line-through') then
+        Include(Style.FontStyle, TFontStyle.fsStrikeOut)
+      else
+        Exclude(Style.FontStyle, TFontStyle.fsStrikeOut);
+    end
+    else if Name = 'text-anchor' then
+      Style.TextAnchor := Value.ToLower;
   end;
 end;
 
@@ -999,6 +1029,13 @@ begin
   S := Attr(Node, 'stroke-dashoffset');
   if not S.IsEmpty then
     ApplyStyleDeclaration('stroke-dashoffset:' + S, Result);
+  for var Name in ['font-family', 'font-size', 'font-weight', 'font-style',
+    'text-decoration', 'text-anchor'] do
+  begin
+    S := Attr(Node, Name);
+    if not S.IsEmpty then
+      ApplyStyleDeclaration(Name + ':' + S, Result);
+  end;
   S := Attr(Node, 'style');
   if not S.IsEmpty then
   begin
@@ -1341,8 +1378,7 @@ begin
     Result := Result + TextContent(Node.ChildNodes[i]);
 end;
 
-procedure TSvgDocument.ApplyTextStyleDeclaration(const Declaration: string;
-  Element: TSvgElement);
+procedure TSvgDocument.ApplyTextStyleDeclaration(const Declaration: string; Element: TSvgElement);
 begin
   for var Item in Declaration.Split([';']) do
   begin
@@ -1404,23 +1440,23 @@ begin
     Element.Text := Element.Text.Replace('  ', ' ');
   Element.Text := Element.Text.Trim;
   Element.TextPosition := PointF(LengthAttr(Node, 'x', FWidth), LengthAttr(Node, 'y', FHeight));
-  Element.FontFamily := 'sans-serif';
-  Element.FontSize := 16;
-  Element.FontStyle := [];
+  Element.FontFamily := Element.Style.FontFamily;
+  Element.FontSize := Element.Style.FontSize;
+  Element.FontStyle := Element.Style.FontStyle;
   ApplyTextStyle(Node, Element);
-  Element.TextAnchor := StyleAttr(Node, 'text-anchor', 'start').ToLower;
+  Element.TextAnchor := Element.Style.TextAnchor;
 
   var HasTSpan := False;
-  for var I := 0 to Node.ChildNodes.Count - 1 do
-    HasTSpan := HasTSpan or SameText(Node.ChildNodes[I].NodeName, 'tspan');
+  for var i := 0 to Node.ChildNodes.Count - 1 do
+    HasTSpan := HasTSpan or SameText(Node.ChildNodes[i].NodeName, 'tspan');
   if not HasTSpan then
     Exit;
 
   Element.TextRuns.Clear;
   var PendingSpace := False;
-  for var I := 0 to Node.ChildNodes.Count - 1 do
+  for var i := 0 to Node.ChildNodes.Count - 1 do
   begin
-    var Child := Node.ChildNodes[I];
+    var Child := Node.ChildNodes[i];
     var RawText := TextContent(Child).Replace(#13, ' ').Replace(#10, ' ').Replace(#9, ' ');
     while RawText.Contains('  ') do
       RawText := RawText.Replace('  ', ' ');
@@ -1445,6 +1481,9 @@ begin
       var ParentFontFamily := Element.FontFamily;
       var ParentFontSize := Element.FontSize;
       var ParentFontStyle := Element.FontStyle;
+      Element.FontFamily := Run.Style.FontFamily;
+      Element.FontSize := Run.Style.FontSize;
+      Element.FontStyle := Run.Style.FontStyle;
       ApplyTextStyle(Child, Element);
       Run.FontFamily := Element.FontFamily;
       Run.FontSize := Element.FontSize;
@@ -1460,8 +1499,7 @@ begin
   Element.Text := '';
 end;
 
-procedure TSvgDocument.ParseShape(const Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle;
-  const Dest: TObjectList<TSvgElement>);
+procedure TSvgDocument.ParseShape(const Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle; const Dest: TObjectList<TSvgElement>);
 begin
   var Name := Node.NodeName.ToLower;
   if Name = 'clippath' then
@@ -1514,9 +1552,9 @@ begin
     Marker.Orient := Attr(Node, 'orient', '0').Trim.ToLower;
     Marker.UnitsStrokeWidth := not SameText(Attr(Node, 'markerUnits', 'strokeWidth'), 'userSpaceOnUse');
 
-    for var I := 0 to Node.ChildNodes.Count - 1 do
+    for var i := 0 to Node.ChildNodes.Count - 1 do
     begin
-      var Child := Node.ChildNodes[I];
+      var Child := Node.ChildNodes[i];
       var Element := TSvgElement.Create;
       try
         var Name := Child.NodeName.ToLower;
@@ -1582,9 +1620,9 @@ begin
       end;
     end;
 
-    for var I := 0 to Node.ChildNodes.Count - 1 do
+    for var i := 0 to Node.ChildNodes.Count - 1 do
     begin
-      var Child := Node.ChildNodes[I];
+      var Child := Node.ChildNodes[i];
       var Element := TSvgElement.Create;
       try
         var Name := Child.NodeName.ToLower;
@@ -1798,8 +1836,7 @@ begin
   end;
 end;
 
-procedure TSvgDocument.ParsePattern(Node: IXMLNode; const Matrix: TSvgMatrix;
-  const Style: TSvgStyle);
+procedure TSvgDocument.ParsePattern(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
 begin
   var ID := Attr(Node, 'id');
   if ID.IsEmpty then
@@ -1829,9 +1866,9 @@ begin
       FHeight := 1;
     end;
     try
-      for var I := 0 to Node.ChildNodes.Count - 1 do
+      for var i := 0 to Node.ChildNodes.Count - 1 do
       begin
-        var Child := Node.ChildNodes[I];
+        var Child := Node.ChildNodes[i];
         var ChildStyle := ParseStyle(Child, Style);
         var ChildMatrix := ParseTransform(Attr(Child, 'transform'));
         ParseShape(Child, ChildMatrix, ChildStyle, Definition.Elements);
@@ -1945,5 +1982,5 @@ begin
 
   ParseNode(Xml.DocumentElement, TSvgMatrix.Identity, TSvgStyle.Default);
 end;
-
 end.
+

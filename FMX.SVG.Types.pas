@@ -86,6 +86,10 @@ type
     StrokeJoin: TStrokeJoin;
     FillRule: TSvgFillRule;
     Visible: Boolean;
+    FontFamily: string;
+    FontSize: Single;
+    FontStyle: TFontStyles;
+    TextAnchor: string;
     class function Default: TSvgStyle; static;
   end;
 
@@ -468,6 +472,10 @@ begin
   Result.StrokeJoin := TStrokeJoin.Miter;
   Result.DashOffset := 0;
   Result.DashArray := nil;
+  Result.FontFamily := 'sans-serif';
+  Result.FontSize := 16;
+  Result.FontStyle := [];
+  Result.TextAnchor := 'start';
 end;
 
 { TSvgElement }

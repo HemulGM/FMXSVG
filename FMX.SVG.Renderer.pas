@@ -15,11 +15,8 @@ type
     function GetContentMatrix: TSvgMatrix;
     procedure RenderMidMarkers(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
     procedure RenderMarker(const Canvas: TCanvas; Marker: TSvgMarker; const Position: TPointF; Angle, Scale: Single);
-    procedure RenderEndpointMarker(const Canvas: TCanvas; Element: TSvgElement;
-      const ViewMatrix: TSvgMatrix; const MarkerID: string; const FromPoint,
-      ToPoint: TPointF; IsStart: Boolean);
-    procedure RenderPattern(const Canvas: TCanvas; Pattern: TSvgPattern;
-      Element: TSvgElement; const ViewMatrix: TSvgMatrix; const Bounds: TRectF);
+    procedure RenderEndpointMarker(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix; const MarkerID: string; const FromPoint, ToPoint: TPointF; IsStart: Boolean);
+    procedure RenderPattern(const Canvas: TCanvas; Pattern: TSvgPattern; Element: TSvgElement; const ViewMatrix: TSvgMatrix; const Bounds: TRectF);
     procedure RenderElement(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
   public
     constructor Create;
@@ -39,6 +36,27 @@ begin
   Result := (Color and $00FFFFFF) or (TAlphaColor(A) shl 24);
 end;
 
+function ResolveSvgFontFamily(const Family: string): string;
+var
+  Value: string;
+begin
+  Value := Family.Trim(['''', '"']).ToLower;
+  { Generic SVG families are CSS keywords, not Windows font names. Supplying
+    them verbatim makes DirectWrite choose a platform-dependent fallback. }
+  if (Value = '') or (Value = 'sans-serif') then
+    Result := 'Arial'
+  else if Value = 'serif' then
+    Result := 'Times New Roman'
+  else if (Value = 'monospace') or (Value = 'monospaced') then
+    Result := 'Consolas'
+  else if Value = 'cursive' then
+    Result := 'Comic Sans MS'
+  else if Value = 'fantasy' then
+    Result := 'Impact'
+  else
+    Result := Family.Trim(['''', '"']);
+end;
+
 function InvertMatrix(const Matrix: TSvgMatrix; out Inverse: TSvgMatrix): Boolean;
 begin
   var Determinant := Matrix.A * Matrix.D - Matrix.B * Matrix.C;
@@ -53,8 +71,7 @@ begin
   Inverse.F := -(Inverse.B * Matrix.E + Inverse.D * Matrix.F);
 end;
 
-procedure TSvgRenderer.RenderPattern(const Canvas: TCanvas; Pattern: TSvgPattern;
-  Element: TSvgElement; const ViewMatrix: TSvgMatrix; const Bounds: TRectF);
+procedure TSvgRenderer.RenderPattern(const Canvas: TCanvas; Pattern: TSvgPattern; Element: TSvgElement; const ViewMatrix: TSvgMatrix; const Bounds: TRectF);
 begin
   if (Pattern.Width <= 0) or (Pattern.Height <= 0) then
     Exit;
@@ -147,8 +164,7 @@ begin
   end;
 end;
 
-procedure TSvgRenderer.RenderMarker(const Canvas: TCanvas; Marker: TSvgMarker;
-  const Position: TPointF; Angle, Scale: Single);
+procedure TSvgRenderer.RenderMarker(const Canvas: TCanvas; Marker: TSvgMarker; const Position: TPointF; Angle, Scale: Single);
 begin
   if not Marker.Style.Visible then
     Exit;
@@ -184,9 +200,7 @@ begin
   end;
 end;
 
-procedure TSvgRenderer.RenderEndpointMarker(const Canvas: TCanvas;
-  Element: TSvgElement; const ViewMatrix: TSvgMatrix; const MarkerID: string;
-  const FromPoint, ToPoint: TPointF; IsStart: Boolean);
+procedure TSvgRenderer.RenderEndpointMarker(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix; const MarkerID: string; const FromPoint, ToPoint: TPointF; IsStart: Boolean);
 begin
   if MarkerID.IsEmpty then
     Exit;
@@ -222,8 +236,7 @@ begin
     RenderMarker(Canvas, Marker, B, Angle, MarkerScale);
 end;
 
-procedure TSvgRenderer.RenderMidMarkers(const Canvas: TCanvas; Element: TSvgElement;
-  const ViewMatrix: TSvgMatrix);
+procedure TSvgRenderer.RenderMidMarkers(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
 begin
   if Element.MarkerStartID.IsEmpty and Element.MarkerMidID.IsEmpty and
     Element.MarkerEndID.IsEmpty then
@@ -358,12 +371,17 @@ begin
 end;
 
 procedure TSvgRenderer.RenderElement(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
+
   procedure SetTextFont(const Family: string; Size: Single; Style: TFontStyles);
   begin
-    Canvas.Font.Family := Family;
+    { FMX reuses a single canvas font. Clear its style before applying a
+      run-specific value so a previous bold/italic face cannot be retained. }
+    Canvas.Font.Style := [];
+    Canvas.Font.Family := ResolveSvgFontFamily(Family);
     Canvas.Font.Size := Size;
     Canvas.Font.Style := Style;
   end;
+
 begin
   if not Element.Style.Visible then
     Exit;
@@ -371,6 +389,8 @@ begin
   begin
     if (Element.Text.IsEmpty and (Element.TextRuns.Count = 0)) or not Element.Style.Fill.Enabled then
       Exit;
+    var TextState := Canvas.SaveState;
+    try
     var TextMatrix := ViewMatrix * Element.Matrix;
     var Position := TextMatrix.TransformPoint(Element.TextPosition);
     { A geometric-mean scale prevents the horizontal component of a
@@ -436,6 +456,10 @@ begin
         X := RunRect.Right;
       end;
     end;
+    finally
+      { Do not let either a tspan font or its brush affect the next text. }
+      Canvas.RestoreState(TextState);
+    end;
     Exit;
   end;
   var Path := TPathData.Create;
@@ -467,15 +491,20 @@ begin
               var P := GradientMatrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
               Brush.Gradient.RadialTransform.RotationCenter.Point := PointF((P.X - Bounds.Left) / Bounds.Width, (P.Y - Bounds.Top) / Bounds.Height);
               Brush.Gradient.RadialTransform.RotationAngle := RadToDeg(ArcTan2(GradientMatrix.B, GradientMatrix.A));
-              Brush.Gradient.RadialTransform.Scale.X := Sqrt(Sqr(GradientMatrix.A) + Sqr(GradientMatrix.B)) / Max(Bounds.Width / 2, 0.0001);
-              Brush.Gradient.RadialTransform.Scale.Y := Sqrt(Sqr(GradientMatrix.C) + Sqr(GradientMatrix.D)) / Max(Bounds.Height / 2, 0.0001);
+              Brush.Gradient.RadialTransform.Scale.X := Definition.Radius *
+                Sqrt(Sqr(GradientMatrix.A) + Sqr(GradientMatrix.B)) / Max(Bounds.Width / 2, 0.0001);
+              Brush.Gradient.RadialTransform.Scale.Y := Definition.Radius *
+                Sqrt(Sqr(GradientMatrix.C) + Sqr(GradientMatrix.D)) / Max(Bounds.Height / 2, 0.0001);
             end
             else
             begin
               Brush.Gradient.RadialTransform.RotationCenter.Point := Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
-              Brush.Gradient.RadialTransform.RotationAngle := 0;
-              Brush.Gradient.RadialTransform.Scale.X := 1;
-              Brush.Gradient.RadialTransform.Scale.Y := 1;
+              Brush.Gradient.RadialTransform.RotationAngle :=
+                RadToDeg(ArcTan2(Definition.Matrix.B, Definition.Matrix.A));
+              Brush.Gradient.RadialTransform.Scale.X := 2 * Definition.Radius *
+                Sqrt(Sqr(Definition.Matrix.A) + Sqr(Definition.Matrix.B));
+              Brush.Gradient.RadialTransform.Scale.Y := 2 * Definition.Radius *
+                Sqrt(Sqr(Definition.Matrix.C) + Sqr(Definition.Matrix.D));
             end;
           end
           else
@@ -504,13 +533,13 @@ begin
             if LengthSquared > 0.000001 then
             begin
               var MinT := Min(Min((-Definition.X1 * DX - Definition.Y1 * DY) / LengthSquared,
-                ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
+                  ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
                 Min((-Definition.X1 * DX + (1 - Definition.Y1) * DY) / LengthSquared,
-                ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
+                  ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
               var MaxT := Max(Max((-Definition.X1 * DX - Definition.Y1 * DY) / LengthSquared,
-                ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
+                  ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
                 Max((-Definition.X1 * DX + (1 - Definition.Y1) * DY) / LengthSquared,
-                ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
+                  ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
               var Range := MaxT - MinT;
               Brush.Gradient.StartPosition.Point := Definition.Matrix.TransformPoint(
                 PointF(Definition.X1 + DX * MinT, Definition.Y1 + DY * MinT));
@@ -579,18 +608,21 @@ begin
                 PointF((P.X - Bounds.Left) / Bounds.Width, (P.Y - Bounds.Top) / Bounds.Height);
               Stroke.Gradient.RadialTransform.RotationAngle :=
                 RadToDeg(ArcTan2(GradientMatrix.B, GradientMatrix.A));
-              Stroke.Gradient.RadialTransform.Scale.X :=
+              Stroke.Gradient.RadialTransform.Scale.X := Definition.Radius *
                 Sqrt(Sqr(GradientMatrix.A) + Sqr(GradientMatrix.B)) / Max(Bounds.Width / 2, 0.0001);
-              Stroke.Gradient.RadialTransform.Scale.Y :=
+              Stroke.Gradient.RadialTransform.Scale.Y := Definition.Radius *
                 Sqrt(Sqr(GradientMatrix.C) + Sqr(GradientMatrix.D)) / Max(Bounds.Height / 2, 0.0001);
             end
             else
             begin
               Stroke.Gradient.RadialTransform.RotationCenter.Point :=
                 Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
-              Stroke.Gradient.RadialTransform.RotationAngle := 0;
-              Stroke.Gradient.RadialTransform.Scale.X := 1;
-              Stroke.Gradient.RadialTransform.Scale.Y := 1;
+              Stroke.Gradient.RadialTransform.RotationAngle :=
+                RadToDeg(ArcTan2(Definition.Matrix.B, Definition.Matrix.A));
+              Stroke.Gradient.RadialTransform.Scale.X := 2 * Definition.Radius *
+                Sqrt(Sqr(Definition.Matrix.A) + Sqr(Definition.Matrix.B));
+              Stroke.Gradient.RadialTransform.Scale.Y := 2 * Definition.Radius *
+                Sqrt(Sqr(Definition.Matrix.C) + Sqr(Definition.Matrix.D));
             end;
           end
           else
@@ -604,10 +636,10 @@ begin
                 TransformPoint(PointF(Definition.X2, Definition.Y2));
               Stroke.Gradient.StartPosition.Point :=
                 PointF((StartPoint.X - Bounds.Left) / Bounds.Width,
-                  (StartPoint.Y - Bounds.Top) / Bounds.Height);
+                (StartPoint.Y - Bounds.Top) / Bounds.Height);
               Stroke.Gradient.StopPosition.Point :=
                 PointF((StopPoint.X - Bounds.Left) / Bounds.Width,
-                  (StopPoint.Y - Bounds.Top) / Bounds.Height);
+                (StopPoint.Y - Bounds.Top) / Bounds.Height);
             end
             else
             begin
