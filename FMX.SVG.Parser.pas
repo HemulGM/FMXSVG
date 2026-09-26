@@ -61,6 +61,8 @@ type
     FMarkers: TObjectDictionary<string, TSvgMarker>;
     FSymbols: TObjectDictionary<string, TSvgSymbol>;
     FTextPaths: TObjectDictionary<string, TSvgTextPath>;
+    FNodesByID: TDictionary<string, IXMLNode>;
+    FUseStack: TDictionary<string, Byte>;
     FClassStyles: TStringList;
     FWidth, FHeight: Single;
     FWidthLength, FHeightLength: TSvgLength;
@@ -92,6 +94,7 @@ type
     procedure ParseMarker(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
     procedure ParseSymbol(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
     procedure ParseUse(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
+    procedure IndexNodesByID(const Node: IXMLNode);
     function Attr(const Node: IXMLNode; const Name: string; const Default: string = ''): string;
     function LengthAttr(const Node: IXMLNode; const Name: string; Reference: Single; Default: Single = 0): Single;
     function ParseFloat(const S: string; Default: Single = 0): Single;
@@ -726,12 +729,16 @@ begin
   FMarkers := TObjectDictionary<string, TSvgMarker>.Create([doOwnsValues]);
   FSymbols := TObjectDictionary<string, TSvgSymbol>.Create([doOwnsValues]);
   FTextPaths := TObjectDictionary<string, TSvgTextPath>.Create([doOwnsValues]);
+  FNodesByID := TDictionary<string, IXMLNode>.Create;
+  FUseStack := TDictionary<string, Byte>.Create;
   FClassStyles := TStringList.Create;
   FClassStyles.NameValueSeparator := #1;
 end;
 
 destructor TSvgDocument.Destroy;
 begin
+  FUseStack.Free;
+  FNodesByID.Free;
   FTextPaths.Free;
   FClipPaths.Free;
   FGradients.Free;
@@ -752,6 +759,8 @@ begin
   FMarkers.Clear;
   FSymbols.Clear;
   FTextPaths.Clear;
+  FNodesByID.Clear;
+  FUseStack.Clear;
   FClassStyles.Clear;
   FWidth := 0;
   FHeight := 0;
@@ -1722,9 +1731,33 @@ end;
 procedure TSvgDocument.ParseUse(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
 begin
   var Reference := Attr(Node, 'href').Trim;
+  if Reference.IsEmpty then
+    Reference := Attr(Node, 'xlink:href').Trim;
   if not Reference.StartsWith('#') then
     Exit;
   Reference := Reference.Substring(1);
+
+  { Unlike <symbol>, SVG permits <use> to reference any element with an id.
+    IndexNodesByID is run before parsing so forward references are supported. }
+  var ReferencedNode: IXMLNode;
+  if FNodesByID.TryGetValue(Reference, ReferencedNode) and
+    not SameText(ReferencedNode.NodeName, 'symbol') then
+  begin
+    { A circular chain of <use> elements must not recurse indefinitely. }
+    if FUseStack.ContainsKey(Reference) then
+      Exit;
+    FUseStack.Add(Reference, 0);
+    try
+      ParseNode(ReferencedNode,
+        Matrix * TSvgMatrix.Translation(
+          LengthAttr(Node, 'x', FWidth), LengthAttr(Node, 'y', FHeight)),
+        Style);
+    finally
+      FUseStack.Remove(Reference);
+    end;
+    Exit;
+  end;
+
   var Symbol: TSvgSymbol;
   if not FSymbols.TryGetValue(Reference, Symbol) then
     Exit;
@@ -1751,6 +1784,15 @@ begin
   for var Command in Symbol.Path.Commands do
     Element.Path.Commands.Add(Command);
   FElements.Add(Element);
+end;
+
+procedure TSvgDocument.IndexNodesByID(const Node: IXMLNode);
+begin
+  var ID := Attr(Node, 'id').Trim;
+  if not ID.IsEmpty then
+    FNodesByID.AddOrSetValue(ID, Node);
+  for var i := 0 to Node.ChildNodes.Count - 1 do
+    IndexNodesByID(Node.ChildNodes[i]);
 end;
 
 procedure TSvgDocument.ParseClipPath(Node: IXMLNode; const Matrix: TSvgMatrix);
@@ -2139,6 +2181,7 @@ begin
   if Xml.DocumentElement = nil then
     Exit;
 
+  IndexNodesByID(Xml.DocumentElement);
   ParseNode(Xml.DocumentElement, TSvgMatrix.Identity, TSvgStyle.Default);
   ResolveGradientReferences;
 end;
