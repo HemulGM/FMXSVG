@@ -694,8 +694,12 @@ begin
           var DashArray: TArray<Single>;
           SetLength(DashArray, Length(Element.Style.DashArray));
           for var I := 0 to High(DashArray) do
-            DashArray[I] := Element.Style.DashArray[I] / Stroke.Thickness;
-          Stroke.SetCustomDash(DashArray, Element.Style.DashOffset / Stroke.Thickness);
+            { FMX stores dash lengths as multiples of the pen width.  Keep
+              the SVG ratio here: the scaled pen thickness then scales both
+              the dashes and their offset in canvas pixels. }
+            DashArray[I] := Element.Style.DashArray[I] / Element.Style.StrokeWidth;
+          Stroke.SetCustomDash(DashArray,
+            Element.Style.DashOffset / Element.Style.StrokeWidth);
         end;
         Canvas.DrawPath(Path, Opacity, Stroke);
       finally
