@@ -57,6 +57,8 @@ type
     FElements: TObjectList<TSvgElement>;
     FClipPaths: TObjectDictionary<string, TSvgPath>;
     FGradients: TObjectDictionary<string, TSvgGradient>;
+    FMarkers: TObjectDictionary<string, TSvgMarker>;
+    FSymbols: TObjectDictionary<string, TSvgSymbol>;
     FClassStyles: TStringList;
     FWidth, FHeight: Single;
     FWidthLength, FHeightLength: TSvgLength;
@@ -79,6 +81,9 @@ type
     procedure ParseClipPath(Node: IXMLNode; const Matrix: TSvgMatrix);
     procedure ParseLinearGradient(Node: IXMLNode);
     procedure ParseRadialGradient(Node: IXMLNode);
+    procedure ParseMarker(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
+    procedure ParseSymbol(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
+    procedure ParseUse(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
     function Attr(const Node: IXMLNode; const Name: string; const Default: string = ''): string;
     function LengthAttr(const Node: IXMLNode; const Name: string; Reference: Single; Default: Single = 0): Single;
     function ParseFloat(const S: string; Default: Single = 0): Single;
@@ -92,6 +97,8 @@ type
     property Elements: TObjectList<TSvgElement> read FElements;
     property ClipPaths: TObjectDictionary<string, TSvgPath> read FClipPaths;
     property Gradients: TObjectDictionary<string, TSvgGradient> read FGradients;
+    property Markers: TObjectDictionary<string, TSvgMarker> read FMarkers;
+    property Symbols: TObjectDictionary<string, TSvgSymbol> read FSymbols;
     property Width: Single read FWidth;
     property Height: Single read FHeight;
     property WidthLength: TSvgLength read FWidthLength;
@@ -705,6 +712,8 @@ begin
   FElements := TObjectList<TSvgElement>.Create(True);
   FClipPaths := TObjectDictionary<string, TSvgPath>.Create([doOwnsValues]);
   FGradients := TObjectDictionary<string, TSvgGradient>.Create([doOwnsValues]);
+  FMarkers := TObjectDictionary<string, TSvgMarker>.Create([doOwnsValues]);
+  FSymbols := TObjectDictionary<string, TSvgSymbol>.Create([doOwnsValues]);
   FClassStyles := TStringList.Create;
   FClassStyles.NameValueSeparator := #1;
 end;
@@ -713,6 +722,8 @@ destructor TSvgDocument.Destroy;
 begin
   FClipPaths.Free;
   FGradients.Free;
+  FMarkers.Free;
+  FSymbols.Free;
   FClassStyles.Free;
   FElements.Free;
   inherited;
@@ -723,6 +734,8 @@ begin
   FElements.Clear;
   FClipPaths.Clear;
   FGradients.Clear;
+  FMarkers.Clear;
+  FSymbols.Clear;
   FClassStyles.Clear;
   FWidth := 0;
   FHeight := 0;
@@ -1338,6 +1351,9 @@ begin
   Element.Matrix := Matrix;
   Element.Style := Style;
   Element.ClipID := Attr(Node, 'clip-path');
+  Element.MarkerStartID := GradientIDFromPaint(Attr(Node, 'marker-start'));
+  Element.MarkerMidID := GradientIDFromPaint(Attr(Node, 'marker-mid'));
+  Element.MarkerEndID := GradientIDFromPaint(Attr(Node, 'marker-end'));
   if Name = 'path' then
     ParsePath(Node, Element)
   else if Name = 'rect' then
@@ -1354,6 +1370,170 @@ begin
     ParsePoly(Node, Element, True);
   if Name = 'text' then
     ParseText(Node, Element);
+  FElements.Add(Element);
+end;
+
+procedure TSvgDocument.ParseMarker(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
+begin
+  var ID := Attr(Node, 'id');
+  if ID.IsEmpty then
+    Exit;
+
+  var Marker := TSvgMarker.Create;
+  try
+    Marker.Width := LengthAttr(Node, 'markerWidth', FWidth, 3);
+    Marker.Height := LengthAttr(Node, 'markerHeight', FHeight, 3);
+    Marker.RefX := LengthAttr(Node, 'refX', Marker.Width);
+    Marker.RefY := LengthAttr(Node, 'refY', Marker.Height);
+    Marker.Orient := Attr(Node, 'orient', '0').Trim.ToLower;
+    Marker.UnitsStrokeWidth := not SameText(Attr(Node, 'markerUnits', 'strokeWidth'), 'userSpaceOnUse');
+
+    for var I := 0 to Node.ChildNodes.Count - 1 do
+    begin
+      var Child := Node.ChildNodes[I];
+      var Element := TSvgElement.Create;
+      try
+        var Name := Child.NodeName.ToLower;
+        Element.Name := Name;
+        Element.Matrix := Matrix * ParseTransform(Attr(Child, 'transform'));
+        Element.Style := ParseStyle(Child, Style);
+        if Name = 'path' then
+          ParsePath(Child, Element)
+        else if Name = 'rect' then
+          ParseRect(Child, Element)
+        else if Name = 'circle' then
+          ParseCircle(Child, Element)
+        else if Name = 'ellipse' then
+          ParseEllipse(Child, Element)
+        else if Name = 'line' then
+          ParseLine(Child, Element)
+        else if Name = 'polyline' then
+          ParsePoly(Child, Element, False)
+        else if Name = 'polygon' then
+          ParsePoly(Child, Element, True)
+        else
+          Continue;
+
+        if Marker.Path.Commands.Count = 0 then
+        begin
+          for var Command in Element.Path.Commands do
+            Marker.Path.Commands.Add(Command);
+          Marker.Style := Element.Style;
+          Marker.Matrix := Element.Matrix;
+        end;
+      finally
+        Element.Free;
+      end;
+    end;
+    if Marker.Path.Commands.Count > 0 then
+    begin
+      FMarkers.AddOrSetValue(ID, Marker);
+      Marker := nil;
+    end;
+  finally
+    Marker.Free;
+  end;
+end;
+
+procedure TSvgDocument.ParseSymbol(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
+begin
+  var ID := Attr(Node, 'id');
+  if ID.IsEmpty then
+    Exit;
+
+  var Symbol := TSvgSymbol.Create;
+  try
+    var ViewBoxText := Attr(Node, 'viewBox');
+    if not ViewBoxText.IsEmpty then
+    begin
+      var Numbers := TSvgNumberParser.Create(ViewBoxText);
+      var X, Y, W, H: Single;
+      if Numbers.ReadNumber(X) and Numbers.ReadNumber(Y) and
+        Numbers.ReadNumber(W) and Numbers.ReadNumber(H) and (W > 0) and (H > 0) then
+      begin
+        Symbol.ViewBox := RectF(X, Y, X + W, Y + H);
+        Symbol.HasViewBox := True;
+      end;
+    end;
+
+    for var I := 0 to Node.ChildNodes.Count - 1 do
+    begin
+      var Child := Node.ChildNodes[I];
+      var Element := TSvgElement.Create;
+      try
+        var Name := Child.NodeName.ToLower;
+        Element.Name := Name;
+        Element.Matrix := Matrix * ParseTransform(Attr(Child, 'transform'));
+        Element.Style := ParseStyle(Child, Style);
+        if Name = 'path' then
+          ParsePath(Child, Element)
+        else if Name = 'rect' then
+          ParseRect(Child, Element)
+        else if Name = 'circle' then
+          ParseCircle(Child, Element)
+        else if Name = 'ellipse' then
+          ParseEllipse(Child, Element)
+        else if Name = 'line' then
+          ParseLine(Child, Element)
+        else if Name = 'polyline' then
+          ParsePoly(Child, Element, False)
+        else if Name = 'polygon' then
+          ParsePoly(Child, Element, True)
+        else
+          Continue;
+
+        if Symbol.Path.Commands.Count = 0 then
+        begin
+          for var Command in Element.Path.Commands do
+            Symbol.Path.Commands.Add(Command);
+          Symbol.Style := Element.Style;
+          Symbol.Matrix := Element.Matrix;
+        end;
+      finally
+        Element.Free;
+      end;
+    end;
+    if Symbol.Path.Commands.Count > 0 then
+    begin
+      FSymbols.AddOrSetValue(ID, Symbol);
+      Symbol := nil;
+    end;
+  finally
+    Symbol.Free;
+  end;
+end;
+
+procedure TSvgDocument.ParseUse(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
+begin
+  var Reference := Attr(Node, 'href').Trim;
+  if not Reference.StartsWith('#') then
+    Exit;
+  Reference := Reference.Substring(1);
+  var Symbol: TSvgSymbol;
+  if not FSymbols.TryGetValue(Reference, Symbol) then
+    Exit;
+
+  var Element := TSvgElement.Create;
+  Element.Name := 'use';
+  Element.Style := Symbol.Style;
+  Element.Matrix := Matrix * TSvgMatrix.Translation(
+    LengthAttr(Node, 'x', FWidth), LengthAttr(Node, 'y', FHeight));
+  if Symbol.HasViewBox then
+  begin
+    var Width := LengthAttr(Node, 'width', FWidth, Symbol.ViewBox.Width);
+    var Height := LengthAttr(Node, 'height', FHeight, Symbol.ViewBox.Height);
+    if (Width <= 0) or (Height <= 0) then
+    begin
+      Element.Free;
+      Exit;
+    end;
+    Element.Matrix := Element.Matrix * TSvgMatrix.Scaling(
+      Width / Symbol.ViewBox.Width, Height / Symbol.ViewBox.Height) *
+      TSvgMatrix.Translation(-Symbol.ViewBox.Left, -Symbol.ViewBox.Top);
+  end;
+  Element.Matrix := Element.Matrix * Symbol.Matrix;
+  for var Command in Symbol.Path.Commands do
+    Element.Path.Commands.Add(Command);
   FElements.Add(Element);
 end;
 
@@ -1499,6 +1679,21 @@ begin
     ParseRadialGradient(Node);
     Exit;
   end;
+  if Name = 'marker' then
+  begin
+    ParseMarker(Node, Matrix, Style);
+    Exit;
+  end;
+  if Name = 'symbol' then
+  begin
+    ParseSymbol(Node, Matrix, Style);
+    Exit;
+  end;
+  if Name = 'use' then
+  begin
+    ParseUse(Node, Matrix, Style);
+    Exit;
+  end;
   if Name = 'style' then
   begin
     ParseCss(Node.Text);
@@ -1509,7 +1704,9 @@ begin
     for var i := 0 to Node.ChildNodes.Count - 1 do
       if SameText(Node.ChildNodes[i].NodeName, 'clippath') or
         SameText(Node.ChildNodes[i].NodeName, 'lineargradient') or
-        SameText(Node.ChildNodes[i].NodeName, 'radialgradient') then
+        SameText(Node.ChildNodes[i].NodeName, 'radialgradient') or
+        SameText(Node.ChildNodes[i].NodeName, 'marker') or
+        SameText(Node.ChildNodes[i].NodeName, 'symbol') then
         ParseNode(Node.ChildNodes[i], Matrix, Style);
     Exit;
   end;
@@ -1558,4 +1755,3 @@ begin
 end;
 
 end.
-

@@ -103,6 +103,29 @@ type
     destructor Destroy; override;
   end;
 
+  TSvgMarker = class
+  public
+    Width, Height, RefX, RefY: Single;
+    Orient: string;
+    UnitsStrokeWidth: Boolean;
+    Path: TSvgPath;
+    Style: TSvgStyle;
+    Matrix: TSvgMatrix;
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  TSvgSymbol = class
+  public
+    Path: TSvgPath;
+    Style: TSvgStyle;
+    Matrix: TSvgMatrix;
+    ViewBox: TRectF;
+    HasViewBox: Boolean;
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
 implementation
 
 function InvariantFloat(const S: string; Default: Single = 0): Single;
@@ -441,5 +464,44 @@ begin
   inherited;
 end;
 
-end.
+{ TSvgMarker }
 
+constructor TSvgMarker.Create;
+begin
+  inherited;
+  Width := 3;
+  Height := 3;
+  RefX := 0;
+  RefY := 0;
+  Orient := '0';
+  UnitsStrokeWidth := True;
+  Path := TSvgPath.Create;
+  Style := TSvgStyle.Default;
+  Matrix := TSvgMatrix.Identity;
+end;
+
+destructor TSvgMarker.Destroy;
+begin
+  Path.Free;
+  inherited;
+end;
+
+{ TSvgSymbol }
+
+constructor TSvgSymbol.Create;
+begin
+  inherited;
+  Path := TSvgPath.Create;
+  Style := TSvgStyle.Default;
+  Matrix := TSvgMatrix.Identity;
+  ViewBox := TRectF.Empty;
+  HasViewBox := False;
+end;
+
+destructor TSvgSymbol.Destroy;
+begin
+  Path.Free;
+  inherited;
+end;
+
+end.

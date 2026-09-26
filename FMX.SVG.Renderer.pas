@@ -13,6 +13,11 @@ type
     FBitmap: TBitmap;
     FRenderScale: Single;
     function GetContentMatrix: TSvgMatrix;
+    procedure RenderMidMarkers(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
+    procedure RenderMarker(const Canvas: TCanvas; Marker: TSvgMarker; const Position: TPointF; Angle, Scale: Single);
+    procedure RenderEndpointMarker(const Canvas: TCanvas; Element: TSvgElement;
+      const ViewMatrix: TSvgMatrix; const MarkerID: string; const FromPoint,
+      ToPoint: TPointF; IsStart: Boolean);
     procedure RenderElement(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
   public
     constructor Create;
@@ -30,6 +35,179 @@ function AlphaColorWithOpacity(Color: TAlphaColor; Opacity: Single): TAlphaColor
 begin
   var A := Round(TAlphaColorRec(Color).A * EnsureRange(Opacity, 0, 1));
   Result := (Color and $00FFFFFF) or (TAlphaColor(A) shl 24);
+end;
+
+procedure TSvgRenderer.RenderMarker(const Canvas: TCanvas; Marker: TSvgMarker;
+  const Position: TPointF; Angle, Scale: Single);
+begin
+  if not Marker.Style.Visible then
+    Exit;
+
+  var Path := TPathData.Create;
+  try
+    var Matrix := TSvgMatrix.Translation(Position.X, Position.Y) *
+      TSvgMatrix.Rotation(Angle) * TSvgMatrix.Scaling(Scale, Scale) *
+      TSvgMatrix.Translation(-Marker.RefX, -Marker.RefY) * Marker.Matrix;
+    Marker.Path.AppendTo(Path, Matrix);
+    var Opacity := EnsureRange(Marker.Style.Opacity, 0, 1);
+    if Marker.Style.Fill.Enabled then
+    begin
+      Canvas.Fill.Kind := TBrushKind.Solid;
+      Canvas.Fill.Color := AlphaColorWithOpacity(Marker.Style.Fill.Color, Marker.Style.FillOpacity);
+      Canvas.FillPath(Path, Opacity);
+    end;
+    if Marker.Style.Stroke.Enabled and (Marker.Style.StrokeWidth > 0) then
+    begin
+      var Stroke := TStrokeBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
+      try
+        Stroke.Color := AlphaColorWithOpacity(Marker.Style.Stroke.Color, Marker.Style.StrokeOpacity);
+        Stroke.Thickness := Marker.Style.StrokeWidth * Scale;
+        Stroke.Cap := Marker.Style.StrokeCap;
+        Stroke.Join := Marker.Style.StrokeJoin;
+        Canvas.DrawPath(Path, Opacity, Stroke);
+      finally
+        Stroke.Free;
+      end;
+    end;
+  finally
+    Path.Free;
+  end;
+end;
+
+procedure TSvgRenderer.RenderEndpointMarker(const Canvas: TCanvas;
+  Element: TSvgElement; const ViewMatrix: TSvgMatrix; const MarkerID: string;
+  const FromPoint, ToPoint: TPointF; IsStart: Boolean);
+begin
+  if MarkerID.IsEmpty then
+    Exit;
+
+  var Marker: TSvgMarker;
+  if not FDocument.Markers.TryGetValue(MarkerID, Marker) then
+    Exit;
+
+  var Matrix := ViewMatrix * Element.Matrix;
+  var A := Matrix.TransformPoint(FromPoint);
+  var B := Matrix.TransformPoint(ToPoint);
+  var DX := B.X - A.X;
+  var DY := B.Y - A.Y;
+  if Hypot(DX, DY) <= 0.0001 then
+    Exit;
+
+  var Angle: Single;
+  if SameText(Marker.Orient, 'auto') or SameText(Marker.Orient, 'auto-start-reverse') then
+  begin
+    Angle := ArcTan2(DY, DX);
+    if IsStart and SameText(Marker.Orient, 'auto-start-reverse') then
+      Angle := Angle + Pi;
+  end
+  else
+    Angle := DegToRad(StrToFloatDef(Marker.Orient.Replace(',', '.'), 0, TFormatSettings.Invariant));
+
+  var MarkerScale := 1.0;
+  if Marker.UnitsStrokeWidth then
+    MarkerScale := Element.Style.StrokeWidth * Sqrt(Sqr(Matrix.A) + Sqr(Matrix.B));
+  if IsStart then
+    RenderMarker(Canvas, Marker, A, Angle, MarkerScale)
+  else
+    RenderMarker(Canvas, Marker, B, Angle, MarkerScale);
+end;
+
+procedure TSvgRenderer.RenderMidMarkers(const Canvas: TCanvas; Element: TSvgElement;
+  const ViewMatrix: TSvgMatrix);
+begin
+  if Element.MarkerStartID.IsEmpty and Element.MarkerMidID.IsEmpty and
+    Element.MarkerEndID.IsEmpty then
+    Exit;
+
+  var Matrix := ViewMatrix * Element.Matrix;
+  var HasIncoming := False;
+  var Current, PreviousTangentPoint: TPointF;
+  for var Command in Element.Path.Commands do
+  begin
+    case Command.Command of
+      spMoveTo:
+        begin
+          if HasIncoming then
+            RenderEndpointMarker(Canvas, Element, ViewMatrix, Element.MarkerEndID,
+              PreviousTangentPoint, Current, False);
+          Current := Command.P1;
+          HasIncoming := False;
+        end;
+      spLineTo, spCurveTo:
+        begin
+          var Next: TPointF;
+          if Command.Command = spLineTo then
+            Next := Command.P1
+          else
+            Next := Command.P3;
+          var OutgoingTangentPoint := Next;
+          if Command.Command = spCurveTo then
+          begin
+            OutgoingTangentPoint := Command.P1;
+            if (Abs(OutgoingTangentPoint.X - Current.X) < 0.0001) and
+              (Abs(OutgoingTangentPoint.Y - Current.Y) < 0.0001) then
+              OutgoingTangentPoint := Next;
+          end;
+          if not HasIncoming then
+            RenderEndpointMarker(Canvas, Element, ViewMatrix, Element.MarkerStartID,
+              Current, OutgoingTangentPoint, True);
+          if HasIncoming then
+          begin
+            var A := Matrix.TransformPoint(PreviousTangentPoint);
+            var B := Matrix.TransformPoint(Current);
+            var C := Matrix.TransformPoint(OutgoingTangentPoint);
+            var InX := B.X - A.X;
+            var InY := B.Y - A.Y;
+            var OutX := C.X - B.X;
+            var OutY := C.Y - B.Y;
+            var InLength := Hypot(InX, InY);
+            var OutLength := Hypot(OutX, OutY);
+            if (InLength > 0.0001) and (OutLength > 0.0001) then
+            begin
+              InX := InX / InLength;
+              InY := InY / InLength;
+              OutX := OutX / OutLength;
+              OutY := OutY / OutLength;
+              var Angle: Single;
+              var Marker: TSvgMarker;
+              if FDocument.Markers.TryGetValue(Element.MarkerMidID, Marker) then
+              begin
+                if SameText(Marker.Orient, 'auto') or SameText(Marker.Orient, 'auto-start-reverse') then
+                  Angle := ArcTan2(InY + OutY, InX + OutX)
+                else
+                  Angle := DegToRad(StrToFloatDef(Marker.Orient.Replace(',', '.'), 0, TFormatSettings.Invariant));
+                var MarkerScale := 1.0;
+                if Marker.UnitsStrokeWidth then
+                  MarkerScale := Element.Style.StrokeWidth *
+                    Sqrt(Sqr(Matrix.A) + Sqr(Matrix.B));
+                RenderMarker(Canvas, Marker, B, Angle, MarkerScale);
+              end;
+            end;
+          end;
+          if Command.Command = spCurveTo then
+          begin
+            PreviousTangentPoint := Command.P2;
+            if (Abs(PreviousTangentPoint.X - Next.X) < 0.0001) and
+              (Abs(PreviousTangentPoint.Y - Next.Y) < 0.0001) then
+              PreviousTangentPoint := Current;
+          end
+          else
+            PreviousTangentPoint := Current;
+          Current := Next;
+          HasIncoming := True;
+        end;
+      spClose:
+        begin
+          if HasIncoming then
+            RenderEndpointMarker(Canvas, Element, ViewMatrix, Element.MarkerEndID,
+              PreviousTangentPoint, Current, False);
+          HasIncoming := False;
+        end;
+    end;
+  end;
+  if HasIncoming then
+    RenderEndpointMarker(Canvas, Element, ViewMatrix, Element.MarkerEndID,
+      PreviousTangentPoint, Current, False);
 end;
 
 constructor TSvgRenderer.Create;
@@ -199,6 +377,7 @@ begin
         Stroke.Free;
       end;
     end;
+    RenderMidMarkers(Canvas, Element, ViewMatrix);
   finally
     Path.Free;
   end;
