@@ -60,6 +60,7 @@ type
     FPatterns: TObjectDictionary<string, TSvgPattern>;
     FMarkers: TObjectDictionary<string, TSvgMarker>;
     FSymbols: TObjectDictionary<string, TSvgSymbol>;
+    FTextPaths: TObjectDictionary<string, TSvgTextPath>;
     FClassStyles: TStringList;
     FWidth, FHeight: Single;
     FWidthLength, FHeightLength: TSvgLength;
@@ -78,6 +79,7 @@ type
     procedure ParseLine(Node: IXMLNode; Element: TSvgElement);
     procedure ParsePoly(Node: IXMLNode; Element: TSvgElement; Closed: Boolean);
     procedure ParseText(Node: IXMLNode; Element: TSvgElement);
+    procedure ParseTextPath(const Node: IXMLNode; const Matrix: TSvgMatrix);
     procedure ApplyTextStyleDeclaration(const Declaration: string; Element: TSvgElement);
     procedure ApplyTextStyle(const Node: IXMLNode; Element: TSvgElement);
     function TextContent(const Node: IXMLNode): string;
@@ -106,6 +108,7 @@ type
     property Patterns: TObjectDictionary<string, TSvgPattern> read FPatterns;
     property Markers: TObjectDictionary<string, TSvgMarker> read FMarkers;
     property Symbols: TObjectDictionary<string, TSvgSymbol> read FSymbols;
+    property TextPaths: TObjectDictionary<string, TSvgTextPath> read FTextPaths;
     property Width: Single read FWidth;
     property Height: Single read FHeight;
     property WidthLength: TSvgLength read FWidthLength;
@@ -722,12 +725,14 @@ begin
   FPatterns := TObjectDictionary<string, TSvgPattern>.Create([doOwnsValues]);
   FMarkers := TObjectDictionary<string, TSvgMarker>.Create([doOwnsValues]);
   FSymbols := TObjectDictionary<string, TSvgSymbol>.Create([doOwnsValues]);
+  FTextPaths := TObjectDictionary<string, TSvgTextPath>.Create([doOwnsValues]);
   FClassStyles := TStringList.Create;
   FClassStyles.NameValueSeparator := #1;
 end;
 
 destructor TSvgDocument.Destroy;
 begin
+  FTextPaths.Free;
   FClipPaths.Free;
   FGradients.Free;
   FPatterns.Free;
@@ -746,6 +751,7 @@ begin
   FPatterns.Clear;
   FMarkers.Clear;
   FSymbols.Clear;
+  FTextPaths.Clear;
   FClassStyles.Clear;
   FWidth := 0;
   FHeight := 0;
@@ -1450,6 +1456,32 @@ begin
   ApplyTextStyle(Node, Element);
   Element.TextAnchor := Element.Style.TextAnchor;
 
+  for var i := 0 to Node.ChildNodes.Count - 1 do
+  begin
+    var Child := Node.ChildNodes[i];
+    if not SameText(Child.NodeName, 'textPath') then
+      Continue;
+    var Href := Attr(Child, 'href');
+    if Href.IsEmpty then
+      Href := Attr(Child, 'xlink:href');
+    if Href.StartsWith('#') then
+      Href := Href.Substring(1);
+    var Definition: TSvgTextPath;
+    if not Href.IsEmpty and FTextPaths.TryGetValue(Href, Definition) then
+    begin
+      Element.TextPath := TSvgTextPath.Create;
+      for var Command in Definition.Path.Commands do
+        Element.TextPath.Path.Commands.Add(Command);
+      Element.TextPath.Matrix := Definition.Matrix;
+      var Offset := Attr(Child, 'startOffset').Trim;
+      Element.TextPathStartOffsetIsPercent := Offset.EndsWith('%');
+      if Element.TextPathStartOffsetIsPercent then
+        Offset := Offset.Substring(0, Offset.Length - 1);
+      Element.TextPathStartOffset := ParseFloat(Offset);
+    end;
+    Break;
+  end;
+
   var HasTSpan := False;
   for var i := 0 to Node.ChildNodes.Count - 1 do
     HasTSpan := HasTSpan or SameText(Node.ChildNodes[i].NodeName, 'tspan');
@@ -1878,6 +1910,30 @@ begin
   end;
 end;
 
+procedure TSvgDocument.ParseTextPath(const Node: IXMLNode; const Matrix: TSvgMatrix);
+begin
+  var ID := Attr(Node, 'id').Trim;
+  if ID.IsEmpty then
+    Exit;
+  var Definition := TSvgTextPath.Create;
+  try
+    var Parser := TSvgPathParser.Create(Definition.Path);
+    try
+      Parser.Parse(Attr(Node, 'd'));
+    finally
+      Parser.Free;
+    end;
+    Definition.Matrix := Matrix * ParseTransform(Attr(Node, 'transform'));
+    if Definition.Path.Commands.Count > 0 then
+    begin
+      FTextPaths.AddOrSetValue(ID, Definition);
+      Definition := nil;
+    end;
+  finally
+    Definition.Free;
+  end;
+end;
+
 procedure TSvgDocument.ResolveGradient(const Definition: TSvgGradient);
 begin
   if Definition.Resolved or Definition.Resolving then
@@ -2020,13 +2076,19 @@ begin
   if Name = 'defs' then
   begin
     for var i := 0 to Node.ChildNodes.Count - 1 do
-      if SameText(Node.ChildNodes[i].NodeName, 'clippath') or
+      if SameText(Node.ChildNodes[i].NodeName, 'path') or
+        SameText(Node.ChildNodes[i].NodeName, 'clippath') or
         SameText(Node.ChildNodes[i].NodeName, 'lineargradient') or
         SameText(Node.ChildNodes[i].NodeName, 'radialgradient') or
         SameText(Node.ChildNodes[i].NodeName, 'pattern') or
         SameText(Node.ChildNodes[i].NodeName, 'marker') or
         SameText(Node.ChildNodes[i].NodeName, 'symbol') then
-        ParseNode(Node.ChildNodes[i], Matrix, Style);
+      begin
+        if SameText(Node.ChildNodes[i].NodeName, 'path') then
+          ParseTextPath(Node.ChildNodes[i], Matrix)
+        else
+          ParseNode(Node.ChildNodes[i], Matrix, Style);
+      end;
     Exit;
   end;
   if (Name = 'svg') or (Name = 'g') then

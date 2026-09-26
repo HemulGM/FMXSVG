@@ -106,6 +106,14 @@ type
     FontStyle: TFontStyles;
   end;
 
+  TSvgTextPath = class
+  public
+    Path: TSvgPath;
+    Matrix: TSvgMatrix;
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   TSvgElement = class
   public
     Name: string;
@@ -120,6 +128,9 @@ type
     FontStyle: TFontStyles;
     TextAnchor: string;
     TextRuns: TObjectList<TSvgTextRun>;
+    TextPath: TSvgTextPath;
+    TextPathStartOffset: Single;
+    TextPathStartOffsetIsPercent: Boolean;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -494,11 +505,29 @@ begin
   FontStyle := [];
   TextAnchor := 'start';
   TextRuns := TObjectList<TSvgTextRun>.Create(True);
+  TextPathStartOffset := 0;
+  TextPathStartOffsetIsPercent := False;
 end;
 
 destructor TSvgElement.Destroy;
 begin
+  TextPath.Free;
   TextRuns.Free;
+  Path.Free;
+  inherited;
+end;
+
+{ TSvgTextPath }
+
+constructor TSvgTextPath.Create;
+begin
+  inherited;
+  Path := TSvgPath.Create;
+  Matrix := TSvgMatrix.Identity;
+end;
+
+destructor TSvgTextPath.Destroy;
+begin
   Path.Free;
   inherited;
 end;

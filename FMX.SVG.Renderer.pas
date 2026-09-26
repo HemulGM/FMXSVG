@@ -28,7 +28,7 @@ type
 implementation
 
 uses
-  System.Math;
+  System.Math, System.Generics.Collections, System.Math.Vectors;
 
 function AlphaColorWithOpacity(Color: TAlphaColor; Opacity: Single): TAlphaColor;
 begin
@@ -395,6 +395,87 @@ procedure TSvgRenderer.RenderElement(const Canvas: TCanvas; Element: TSvgElement
     Canvas.Font.Style := Style;
   end;
 
+  procedure BuildTextPath(const SvgPath: TSvgPath; const Matrix: TSvgMatrix;
+    const Points: TList<TPointF>);
+  var
+    Current, Start: TPointF;
+    Command: TSvgPathCommand;
+    I: Integer;
+    T, U: Single;
+    P: TPointF;
+  begin
+    Current := PointF(0, 0);
+    Start := Current;
+    for Command in SvgPath.Commands do
+      case Command.Command of
+        spMoveTo:
+          begin
+            Current := Matrix.TransformPoint(Command.P1);
+            Start := Current;
+            Points.Add(Current);
+          end;
+        spLineTo:
+          begin
+            Current := Matrix.TransformPoint(Command.P1);
+            Points.Add(Current);
+          end;
+        spCurveTo:
+          begin
+            var C1 := Matrix.TransformPoint(Command.P1);
+            var C2 := Matrix.TransformPoint(Command.P2);
+            var Finish := Matrix.TransformPoint(Command.P3);
+            { Flattening makes measuring and locating glyphs independent of the
+              FMX canvas backend while retaining a smooth cubic curve. }
+            for I := 1 to 24 do
+            begin
+              T := I / 24;
+              U := 1 - T;
+              P := PointF(U * U * U * Current.X + 3 * U * U * T * C1.X +
+                  3 * U * T * T * C2.X + T * T * T * Finish.X,
+                U * U * U * Current.Y + 3 * U * U * T * C1.Y +
+                  3 * U * T * T * C2.Y + T * T * T * Finish.Y);
+              Points.Add(P);
+            end;
+            Current := Finish;
+          end;
+        spClose:
+          begin
+            Current := Start;
+            Points.Add(Current);
+          end;
+      end;
+  end;
+
+  function PointOnTextPath(const Points: TList<TPointF>; Distance: Single;
+    out Position, Tangent: TPointF): Boolean;
+  var
+    I: Integer;
+    A, B: TPointF;
+    SegmentLength, Remaining: Single;
+  begin
+    Result := False;
+    if Points.Count < 2 then
+      Exit;
+    Remaining := Distance;
+    for I := 1 to Points.Count - 1 do
+    begin
+      A := Points[I - 1];
+      B := Points[I];
+      Tangent := PointF(B.X - A.X, B.Y - A.Y);
+      SegmentLength := Hypot(Tangent.X, Tangent.Y);
+      if SegmentLength <= 0.0001 then
+        Continue;
+      if Remaining <= SegmentLength then
+      begin
+        Position := PointF(A.X + Tangent.X * Remaining / SegmentLength,
+          A.Y + Tangent.Y * Remaining / SegmentLength);
+        Result := True;
+        Exit;
+      end;
+      Remaining := Remaining - SegmentLength;
+    end;
+  end;
+
 begin
   if not Element.Style.Visible then
     Exit;
@@ -405,6 +486,69 @@ begin
     var TextState := Canvas.SaveState;
     try
     var TextMatrix := ViewMatrix * Element.Matrix;
+    if Element.TextPath <> nil then
+    begin
+      var Points := TList<TPointF>.Create;
+      try
+        BuildTextPath(Element.TextPath.Path, TextMatrix * Element.TextPath.Matrix, Points);
+        var PathLength := 0.0;
+        for var I := 1 to Points.Count - 1 do
+          PathLength := PathLength + Hypot(Points[I].X - Points[I - 1].X,
+            Points[I].Y - Points[I - 1].Y);
+        var TextScale := Sqrt(Abs(TextMatrix.A * TextMatrix.D - TextMatrix.B * TextMatrix.C));
+        if TextScale <= 0 then
+          TextScale := 1;
+        var FontSize := Element.FontSize * TextScale;
+        SetTextFont(Element.FontFamily, FontSize, Element.FontStyle);
+        Canvas.Fill.Kind := TBrushKind.Solid;
+        Canvas.Fill.Color := AlphaColorWithOpacity(Element.Style.Fill.Color, Element.Style.FillOpacity);
+        var PathText := Element.Text;
+        if Element.TextRuns.Count > 0 then
+        begin
+          PathText := '';
+          for var Run in Element.TextRuns do
+            PathText := PathText + Run.Text;
+        end;
+        var TextWidth := 0.0;
+        for var I := 1 to PathText.Length do
+          TextWidth := TextWidth + Canvas.TextWidth(string(PathText[I]));
+        var Offset := Element.TextPathStartOffset;
+        if Element.TextPathStartOffsetIsPercent then
+          Offset := PathLength * Offset / 100
+        else
+          Offset := Offset * TextScale;
+        if Element.TextAnchor = 'middle' then
+          Offset := Offset - TextWidth / 2
+        else if Element.TextAnchor = 'end' then
+          Offset := Offset - TextWidth;
+        for var I := 1 to PathText.Length do
+        begin
+          var Glyph := PathText[I];
+          var GlyphText := string(Glyph);
+          var GlyphWidth := Canvas.TextWidth(GlyphText);
+          var Position, Tangent: TPointF;
+          if not PointOnTextPath(Points, Offset, Position, Tangent) then
+            Break;
+          var GlyphState := Canvas.SaveState;
+          try
+            Canvas.SetMatrix(TMatrix.CreateRotation(ArcTan2(Tangent.Y, Tangent.X)) *
+              TMatrix.CreateTranslation(Position.X, Position.Y));
+            var GlyphHeight := Canvas.TextHeight(GlyphText);
+            var GlyphRect := RectF(0, -GlyphHeight + FontSize * 0.22,
+              GlyphWidth, FontSize * 0.22);
+            Canvas.FillText(GlyphRect, GlyphText, False,
+              EnsureRange(Element.Style.Opacity, 0, 1), [], TTextAlign.Leading,
+              TTextAlign.Trailing);
+          finally
+            Canvas.RestoreState(GlyphState);
+          end;
+          Offset := Offset + GlyphWidth;
+        end;
+      finally
+        Points.Free;
+      end;
+      Exit;
+    end;
     var Position := TextMatrix.TransformPoint(Element.TextPosition);
     { A geometric-mean scale prevents the horizontal component of a
       non-uniform transform from stretching the font metrics vertically. }
