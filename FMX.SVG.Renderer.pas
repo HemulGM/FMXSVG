@@ -485,6 +485,11 @@ begin
           if Definition.Kind = sgRadial then
           begin
             Brush.Gradient.Style := TGradientStyle.Radial;
+            { TCanvasD2D defines the radial brush center relative to its bounds,
+              but applies only the transform matrix to the brush. Translate the
+              brush into the path bounds so the normalized center maps to the
+              same canvas coordinates on every FMX backend. }
+            Brush.Gradient.RadialTransform.Position.Point := Bounds.TopLeft;
             if Definition.UnitsUserSpace then
             begin
               var GradientMatrix := ViewMatrix * Element.Matrix * Definition.Matrix;
@@ -600,6 +605,7 @@ begin
           if Definition.Kind = sgRadial then
           begin
             Stroke.Gradient.Style := TGradientStyle.Radial;
+            Stroke.Gradient.RadialTransform.Position.Point := Bounds.TopLeft;
             if Definition.UnitsUserSpace then
             begin
               var GradientMatrix := ViewMatrix * Element.Matrix * Definition.Matrix;
