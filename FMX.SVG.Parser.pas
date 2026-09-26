@@ -1442,12 +1442,17 @@ begin
     if SameText(Child.NodeName, 'tspan') then
     begin
       Run.Style := ParseStyle(Child, Run.Style);
+      var ParentFontFamily := Element.FontFamily;
+      var ParentFontSize := Element.FontSize;
+      var ParentFontStyle := Element.FontStyle;
       ApplyTextStyle(Child, Element);
       Run.FontFamily := Element.FontFamily;
       Run.FontSize := Element.FontSize;
       Run.FontStyle := Element.FontStyle;
-      { Restore the parent presentation before processing the next run. }
-      ApplyTextStyle(Node, Element);
+      { A tspan style must not leak to its siblings or to the parent text. }
+      Element.FontFamily := ParentFontFamily;
+      Element.FontSize := ParentFontSize;
+      Element.FontStyle := ParentFontStyle;
     end;
     Element.TextRuns.Add(Run);
     PendingSpace := RawText.EndsWith(' ');
