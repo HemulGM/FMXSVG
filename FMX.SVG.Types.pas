@@ -73,6 +73,10 @@ type
     UnitsUserSpace: Boolean;
     X1, Y1, X2, Y2, Radius: Single;
     Matrix: TSvgMatrix;
+    Href: string;
+    HasUnitsUserSpace, HasSpread, HasMatrix: Boolean;
+    HasX1, HasY1, HasX2, HasY2, HasRadius: Boolean;
+    Resolving, Resolved: Boolean;
     Gradient: TGradient;
     constructor Create;
     destructor Destroy; override;

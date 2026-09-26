@@ -36,6 +36,18 @@ begin
   Result := (Color and $00FFFFFF) or (TAlphaColor(A) shl 24);
 end;
 
+function StrokeScale(const Matrix: TSvgMatrix): Single;
+begin
+  { Paths are transformed before they are passed to FMX.  TStrokeBrush, on
+    the other hand, is expressed in canvas pixels, so its thickness must be
+    transformed separately.  The geometric mean provides the matching scale
+    for normal (uniform) viewBox scaling and a stable approximation for a
+    non-uniform transform. }
+  Result := Sqrt(Abs(Matrix.A * Matrix.D - Matrix.B * Matrix.C));
+  if Result <= 0.00001 then
+    Result := 1;
+end;
+
 function ResolveSvgFontFamily(const Family: string): string;
 var
   Value: string;
@@ -141,7 +153,8 @@ begin
                 try
                   Stroke.Color := AlphaColorWithOpacity(PatternElement.Style.Stroke.Color,
                     PatternElement.Style.StrokeOpacity);
-                  Stroke.Thickness := PatternElement.Style.StrokeWidth;
+                  Stroke.Thickness := PatternElement.Style.StrokeWidth *
+                    StrokeScale(PatternMatrix * PatternElement.Matrix);
                   Stroke.Cap := PatternElement.Style.StrokeCap;
                   Stroke.Join := PatternElement.Style.StrokeJoin;
                   PatternBitmap.Canvas.DrawPath(TilePath, Opacity, Stroke);
@@ -672,7 +685,8 @@ begin
         end
         else
           Stroke.Color := AlphaColorWithOpacity(Element.Style.Stroke.Color, Element.Style.StrokeOpacity);
-        Stroke.Thickness := Element.Style.StrokeWidth;
+        Stroke.Thickness := Element.Style.StrokeWidth *
+          StrokeScale(ViewMatrix * Element.Matrix);
         Stroke.Cap := Element.Style.StrokeCap;
         Stroke.Join := Element.Style.StrokeJoin;
         if Length(Element.Style.DashArray) > 0 then

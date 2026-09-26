@@ -84,6 +84,8 @@ type
     procedure ParseClipPath(Node: IXMLNode; const Matrix: TSvgMatrix);
     procedure ParseLinearGradient(Node: IXMLNode);
     procedure ParseRadialGradient(Node: IXMLNode);
+    procedure ResolveGradientReferences;
+    procedure ResolveGradient(const Definition: TSvgGradient);
     procedure ParsePattern(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
     procedure ParseMarker(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
     procedure ParseSymbol(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
@@ -1757,6 +1759,20 @@ begin
 
   var Definition := TSvgGradient.Create;
   try
+    Definition.Href := Attr(Node, 'href');
+    if Definition.Href.IsEmpty then
+      Definition.Href := Attr(Node, 'xlink:href');
+    if Definition.Href.StartsWith('#') then
+      Definition.Href := Definition.Href.Substring(1)
+    else
+      Definition.Href := '';
+    Definition.HasUnitsUserSpace := Node.HasAttribute('gradientUnits');
+    Definition.HasSpread := Node.HasAttribute('spreadMethod');
+    Definition.HasMatrix := Node.HasAttribute('gradientTransform');
+    Definition.HasX1 := Node.HasAttribute('x1');
+    Definition.HasY1 := Node.HasAttribute('y1');
+    Definition.HasX2 := Node.HasAttribute('x2');
+    Definition.HasY2 := Node.HasAttribute('y2');
     Definition.UnitsUserSpace := SameText(Attr(Node, 'gradientUnits'), 'userSpaceOnUse');
     if SameText(Attr(Node, 'spreadMethod'), 'repeat') then
       Definition.Spread := sgsRepeat
@@ -1787,7 +1803,7 @@ begin
       Point.Offset := Offset;
       Point.Color := AlphaColorWithOpacity(Color, Opacity);
     end;
-    if Definition.Gradient.Points.Count > 0 then
+    if (Definition.Gradient.Points.Count > 0) or not Definition.Href.IsEmpty then
     begin
       FGradients.AddOrSetValue(ID, Definition);
       Definition := nil;
@@ -1806,6 +1822,21 @@ begin
   var Definition := TSvgGradient.Create;
   try
     Definition.Kind := sgRadial;
+    Definition.Href := Attr(Node, 'href');
+    if Definition.Href.IsEmpty then
+      Definition.Href := Attr(Node, 'xlink:href');
+    if Definition.Href.StartsWith('#') then
+      Definition.Href := Definition.Href.Substring(1)
+    else
+      Definition.Href := '';
+    Definition.HasUnitsUserSpace := Node.HasAttribute('gradientUnits');
+    Definition.HasSpread := Node.HasAttribute('spreadMethod');
+    Definition.HasMatrix := Node.HasAttribute('gradientTransform');
+    Definition.HasX1 := Node.HasAttribute('cx');
+    Definition.HasY1 := Node.HasAttribute('cy');
+    Definition.HasX2 := Node.HasAttribute('fx');
+    Definition.HasY2 := Node.HasAttribute('fy');
+    Definition.HasRadius := Node.HasAttribute('r');
     Definition.UnitsUserSpace := SameText(Attr(Node, 'gradientUnits'), 'userSpaceOnUse');
     if SameText(Attr(Node, 'spreadMethod'), 'repeat') then
       Definition.Spread := sgsRepeat
@@ -1837,7 +1868,7 @@ begin
       Point.Offset := Offset;
       Point.Color := AlphaColorWithOpacity(Color, Opacity);
     end;
-    if Definition.Gradient.Points.Count > 0 then
+    if (Definition.Gradient.Points.Count > 0) or not Definition.Href.IsEmpty then
     begin
       FGradients.AddOrSetValue(ID, Definition);
       Definition := nil;
@@ -1845,6 +1876,54 @@ begin
   finally
     Definition.Free;
   end;
+end;
+
+procedure TSvgDocument.ResolveGradient(const Definition: TSvgGradient);
+begin
+  if Definition.Resolved or Definition.Resolving then
+    Exit;
+
+  Definition.Resolving := True;
+  try
+    var Parent: TSvgGradient;
+    if not Definition.Href.IsEmpty and FGradients.TryGetValue(Definition.Href, Parent) then
+    begin
+      ResolveGradient(Parent);
+      if Definition.Gradient.Points.Count = 0 then
+        for var I := 0 to Parent.Gradient.Points.Count - 1 do
+        begin
+          var Source := Parent.Gradient.Points[I];
+          var Target := TGradientPoint(Definition.Gradient.Points.Add);
+          Target.Offset := Source.Offset;
+          Target.Color := Source.Color;
+        end;
+      if not Definition.HasUnitsUserSpace then
+        Definition.UnitsUserSpace := Parent.UnitsUserSpace;
+      if not Definition.HasSpread then
+        Definition.Spread := Parent.Spread;
+      if not Definition.HasMatrix then
+        Definition.Matrix := Parent.Matrix;
+      if not Definition.HasX1 then
+        Definition.X1 := Parent.X1;
+      if not Definition.HasY1 then
+        Definition.Y1 := Parent.Y1;
+      if not Definition.HasX2 then
+        Definition.X2 := Parent.X2;
+      if not Definition.HasY2 then
+        Definition.Y2 := Parent.Y2;
+      if not Definition.HasRadius then
+        Definition.Radius := Parent.Radius;
+    end;
+    Definition.Resolved := True;
+  finally
+    Definition.Resolving := False;
+  end;
+end;
+
+procedure TSvgDocument.ResolveGradientReferences;
+begin
+  for var Definition in FGradients.Values do
+    ResolveGradient(Definition);
 end;
 
 procedure TSvgDocument.ParsePattern(Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle);
@@ -1992,6 +2071,7 @@ begin
     Exit;
 
   ParseNode(Xml.DocumentElement, TSvgMatrix.Identity, TSvgStyle.Default);
+  ResolveGradientReferences;
 end;
 
 end.
