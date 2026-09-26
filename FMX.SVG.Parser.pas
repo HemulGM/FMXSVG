@@ -79,6 +79,8 @@ type
     procedure ParseLine(Node: IXMLNode; Element: TSvgElement);
     procedure ParsePoly(Node: IXMLNode; Element: TSvgElement; Closed: Boolean);
     procedure ParseText(Node: IXMLNode; Element: TSvgElement);
+    procedure ApplyTextStyleDeclaration(const Declaration: string; Element: TSvgElement);
+    procedure ApplyTextStyle(const Node: IXMLNode; Element: TSvgElement);
     function TextContent(const Node: IXMLNode): string;
     procedure ParseClipPath(Node: IXMLNode; const Matrix: TSvgMatrix);
     procedure ParseLinearGradient(Node: IXMLNode);
@@ -871,7 +873,8 @@ begin
     else if Name = 'stroke' then
     begin
       Style.Stroke.Enabled := not SameText(Value, 'none');
-      if Style.Stroke.Enabled then
+      Style.Stroke.GradientID := GradientIDFromPaint(Value);
+      if Style.Stroke.Enabled and Style.Stroke.GradientID.IsEmpty then
         Style.Stroke.Color := ParseColor(Value, Style.Stroke.Color);
     end
     else if Name = 'stroke-width' then
@@ -963,7 +966,8 @@ begin
   if not S.IsEmpty then
   begin
     Result.Stroke.Enabled := not SameText(S.Trim, 'none');
-    if Result.Stroke.Enabled then
+    Result.Stroke.GradientID := GradientIDFromPaint(S);
+    if Result.Stroke.Enabled and Result.Stroke.GradientID.IsEmpty then
       Result.Stroke.Color := ParseColor(S, Result.Stroke.Color);
   end;
   S := Attr(Node, 'stroke-width');
@@ -1017,7 +1021,8 @@ begin
       else if Name = 'stroke' then
       begin
         Result.Stroke.Enabled := not SameText(Value, 'none');
-        if Result.Stroke.Enabled then
+        Result.Stroke.GradientID := GradientIDFromPaint(Value);
+        if Result.Stroke.Enabled and Result.Stroke.GradientID.IsEmpty then
           Result.Stroke.Color := ParseColor(Value, Result.Stroke.Color);
       end
       else if Name = 'stroke-width' then
@@ -1336,13 +1341,118 @@ begin
     Result := Result + TextContent(Node.ChildNodes[i]);
 end;
 
+procedure TSvgDocument.ApplyTextStyleDeclaration(const Declaration: string;
+  Element: TSvgElement);
+begin
+  for var Item in Declaration.Split([';']) do
+  begin
+    var Separator := Item.IndexOf(':');
+    if Separator < 0 then
+      Continue;
+
+    var Name := Item.Substring(0, Separator).Trim.ToLower;
+    var Value := Item.Substring(Separator + 1).Trim;
+    if Name = 'font-family' then
+      Element.FontFamily := Value.Trim(['''', '"'])
+    else if Name = 'font-size' then
+      Element.FontSize := TSvgLength.Parse(Value, Element.FontSize).Resolve(16, Element.FontSize)
+    else if Name = 'font-weight' then
+    begin
+      if SameText(Value, 'bold') or (ParseFloat(Value, 400) >= 600) then
+        Include(Element.FontStyle, TFontStyle.fsBold)
+      else
+        Exclude(Element.FontStyle, TFontStyle.fsBold);
+    end
+    else if Name = 'font-style' then
+    begin
+      if SameText(Value, 'italic') or SameText(Value, 'oblique') then
+        Include(Element.FontStyle, TFontStyle.fsItalic)
+      else
+        Exclude(Element.FontStyle, TFontStyle.fsItalic);
+    end
+    else if Name = 'text-decoration' then
+    begin
+      if Value.ToLower.Contains('underline') then
+        Include(Element.FontStyle, TFontStyle.fsUnderline)
+      else
+        Exclude(Element.FontStyle, TFontStyle.fsUnderline);
+      if Value.ToLower.Contains('line-through') then
+        Include(Element.FontStyle, TFontStyle.fsStrikeOut)
+      else
+        Exclude(Element.FontStyle, TFontStyle.fsStrikeOut);
+    end;
+  end;
+end;
+
+procedure TSvgDocument.ApplyTextStyle(const Node: IXMLNode; Element: TSvgElement);
+begin
+  { CSS class rules are applied before the element's inline attributes. }
+  for var ClassName in Attr(Node, 'class').Split([' ']) do
+    if not ClassName.Trim.IsEmpty and (FClassStyles.Values[ClassName.Trim] <> '') then
+      ApplyTextStyleDeclaration(FClassStyles.Values[ClassName.Trim], Element);
+
+  ApplyTextStyleDeclaration(Attr(Node, 'style'), Element);
+  for var Name in ['font-family', 'font-size', 'font-weight', 'font-style', 'text-decoration'] do
+    if Node.HasAttribute(Name) then
+      ApplyTextStyleDeclaration(Name + ':' + Attr(Node, Name), Element);
+end;
+
 procedure TSvgDocument.ParseText(Node: IXMLNode; Element: TSvgElement);
 begin
-  Element.Text := TextContent(Node).Trim;
+  Element.Text := TextContent(Node).Replace(#13, ' ').Replace(#10, ' ').Replace(#9, ' ');
+  while Element.Text.Contains('  ') do
+    Element.Text := Element.Text.Replace('  ', ' ');
+  Element.Text := Element.Text.Trim;
   Element.TextPosition := PointF(LengthAttr(Node, 'x', FWidth), LengthAttr(Node, 'y', FHeight));
-  Element.FontFamily := Attr(Node, 'font-family', 'sans-serif');
-  Element.FontSize := TSvgLength.Parse(Attr(Node, 'font-size', '16px'), 16).Resolve(16, 16);
-  Element.TextAnchor := Attr(Node, 'text-anchor', 'start').ToLower;
+  Element.FontFamily := 'sans-serif';
+  Element.FontSize := 16;
+  Element.FontStyle := [];
+  ApplyTextStyle(Node, Element);
+  Element.TextAnchor := StyleAttr(Node, 'text-anchor', 'start').ToLower;
+
+  var HasTSpan := False;
+  for var I := 0 to Node.ChildNodes.Count - 1 do
+    HasTSpan := HasTSpan or SameText(Node.ChildNodes[I].NodeName, 'tspan');
+  if not HasTSpan then
+    Exit;
+
+  Element.TextRuns.Clear;
+  var PendingSpace := False;
+  for var I := 0 to Node.ChildNodes.Count - 1 do
+  begin
+    var Child := Node.ChildNodes[I];
+    var RawText := TextContent(Child).Replace(#13, ' ').Replace(#10, ' ').Replace(#9, ' ');
+    while RawText.Contains('  ') do
+      RawText := RawText.Replace('  ', ' ');
+    if RawText.Trim.IsEmpty then
+    begin
+      PendingSpace := PendingSpace or not RawText.IsEmpty;
+      Continue;
+    end;
+
+    var Run := TSvgTextRun.Create;
+    Run.Text := RawText.Trim;
+    if (Element.TextRuns.Count > 0) and
+      (PendingSpace or RawText.StartsWith(' ')) then
+      Run.Text := ' ' + Run.Text;
+    Run.Style := Element.Style;
+    Run.FontFamily := Element.FontFamily;
+    Run.FontSize := Element.FontSize;
+    Run.FontStyle := Element.FontStyle;
+    if SameText(Child.NodeName, 'tspan') then
+    begin
+      Run.Style := ParseStyle(Child, Run.Style);
+      ApplyTextStyle(Child, Element);
+      Run.FontFamily := Element.FontFamily;
+      Run.FontSize := Element.FontSize;
+      Run.FontStyle := Element.FontStyle;
+      { Restore the parent presentation before processing the next run. }
+      ApplyTextStyle(Node, Element);
+    end;
+    Element.TextRuns.Add(Run);
+    PendingSpace := RawText.EndsWith(' ');
+  end;
+  Element.Text := '';
 end;
 
 procedure TSvgDocument.ParseShape(const Node: IXMLNode; const Matrix: TSvgMatrix; const Style: TSvgStyle;

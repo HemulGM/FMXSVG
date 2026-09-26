@@ -89,6 +89,15 @@ type
     class function Default: TSvgStyle; static;
   end;
 
+  TSvgTextRun = class
+  public
+    Text: string;
+    Style: TSvgStyle;
+    FontFamily: string;
+    FontSize: Single;
+    FontStyle: TFontStyles;
+  end;
+
   TSvgElement = class
   public
     Name: string;
@@ -100,7 +109,9 @@ type
     TextPosition: TPointF;
     FontFamily: string;
     FontSize: Single;
+    FontStyle: TFontStyles;
     TextAnchor: string;
+    TextRuns: TObjectList<TSvgTextRun>;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -468,11 +479,14 @@ begin
   Matrix := TSvgMatrix.Identity;
   Style := TSvgStyle.Default;
   FontSize := 12;
+  FontStyle := [];
   TextAnchor := 'start';
+  TextRuns := TObjectList<TSvgTextRun>.Create(True);
 end;
 
 destructor TSvgElement.Destroy;
 begin
+  TextRuns.Free;
   Path.Free;
   inherited;
 end;

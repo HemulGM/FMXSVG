@@ -358,38 +358,84 @@ begin
 end;
 
 procedure TSvgRenderer.RenderElement(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
+  procedure SetTextFont(const Family: string; Size: Single; Style: TFontStyles);
+  begin
+    Canvas.Font.Family := Family;
+    Canvas.Font.Size := Size;
+    Canvas.Font.Style := Style;
+  end;
 begin
   if not Element.Style.Visible then
     Exit;
   if Element.Name = 'text' then
   begin
-    if Element.Text.IsEmpty or not Element.Style.Fill.Enabled then
+    if (Element.Text.IsEmpty and (Element.TextRuns.Count = 0)) or not Element.Style.Fill.Enabled then
       Exit;
     var TextMatrix := ViewMatrix * Element.Matrix;
     var Position := TextMatrix.TransformPoint(Element.TextPosition);
-    var TextScale := Sqrt(Sqr(TextMatrix.A) + Sqr(TextMatrix.B));
+    { A geometric-mean scale prevents the horizontal component of a
+      non-uniform transform from stretching the font metrics vertically. }
+    var TextScale := Sqrt(Abs(TextMatrix.A * TextMatrix.D - TextMatrix.B * TextMatrix.C));
     if TextScale <= 0 then
       TextScale := 1;
     var FontSize := Element.FontSize * TextScale;
-    Canvas.Font.Family := Element.FontFamily;
-    Canvas.Font.Size := FontSize;
+    SetTextFont(Element.FontFamily, FontSize, Element.FontStyle);
     Canvas.Fill.Kind := TBrushKind.Solid;
     Canvas.Fill.Color := AlphaColorWithOpacity(Element.Style.Fill.Color, Element.Style.FillOpacity);
     var Align := TTextAlign.Leading;
     var TextRect: TRectF;
+    var TextHeight := Canvas.TextHeight(Element.Text);
+    { SVG y denotes the baseline, whereas FMX positions text in a rectangle.
+      Most fonts reserve roughly one fifth of the em below the baseline. }
+    var BaselineOffset := FontSize * 0.22;
+    var TextWidth := Canvas.TextWidth(Element.Text);
+    if Element.TextRuns.Count > 0 then
+    begin
+      TextWidth := 0;
+      for var Run in Element.TextRuns do
+      begin
+        SetTextFont(Run.FontFamily, Run.FontSize * TextScale, Run.FontStyle);
+        TextWidth := TextWidth + Canvas.TextWidth(Run.Text);
+      end;
+      SetTextFont(Element.FontFamily, FontSize, Element.FontStyle);
+    end;
     if Element.TextAnchor = 'middle' then
     begin
       Align := TTextAlign.Center;
-      TextRect := RectF(Position.X - 5000, Position.Y - FontSize, Position.X + 5000, Position.Y + FontSize);
+      TextRect := RectF(Position.X - 5000, Position.Y - TextHeight + BaselineOffset,
+        Position.X + 5000, Position.Y + BaselineOffset);
     end
     else if Element.TextAnchor = 'end' then
     begin
       Align := TTextAlign.Trailing;
-      TextRect := RectF(Position.X - 10000, Position.Y - FontSize, Position.X, Position.Y + FontSize);
+      TextRect := RectF(Position.X - 10000, Position.Y - TextHeight + BaselineOffset,
+        Position.X, Position.Y + BaselineOffset);
     end
     else
-      TextRect := RectF(Position.X, Position.Y - FontSize, Position.X + 10000, Position.Y + FontSize);
-    Canvas.FillText(TextRect, Element.Text, False, EnsureRange(Element.Style.Opacity, 0, 1), [], Align, TTextAlign.Trailing);
+      TextRect := RectF(Position.X, Position.Y - TextHeight + BaselineOffset,
+        Position.X + 10000, Position.Y + BaselineOffset);
+    if Element.TextRuns.Count = 0 then
+      Canvas.FillText(TextRect, Element.Text, False, EnsureRange(Element.Style.Opacity, 0, 1), [], Align, TTextAlign.Trailing)
+    else
+    begin
+      var X := Position.X;
+      if Element.TextAnchor = 'middle' then
+        X := X - TextWidth / 2
+      else if Element.TextAnchor = 'end' then
+        X := X - TextWidth;
+      for var Run in Element.TextRuns do
+      begin
+        var RunFontSize := Run.FontSize * TextScale;
+        SetTextFont(Run.FontFamily, RunFontSize, Run.FontStyle);
+        Canvas.Fill.Color := AlphaColorWithOpacity(Run.Style.Fill.Color, Run.Style.FillOpacity);
+        var RunHeight := Canvas.TextHeight(Run.Text);
+        var RunRect := RectF(X, Position.Y - RunHeight + RunFontSize * 0.22,
+          X + Canvas.TextWidth(Run.Text), Position.Y + RunFontSize * 0.22);
+        Canvas.FillText(RunRect, Run.Text, False, EnsureRange(Run.Style.Opacity, 0, 1), [],
+          TTextAlign.Leading, TTextAlign.Trailing);
+        X := RunRect.Right;
+      end;
+    end;
     Exit;
   end;
   var Path := TPathData.Create;
@@ -516,7 +562,78 @@ begin
     begin
       var Stroke := TStrokeBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
       try
-        Stroke.Color := AlphaColorWithOpacity(Element.Style.Stroke.Color, Element.Style.StrokeOpacity);
+        var Definition: TSvgGradient;
+        if not Element.Style.Stroke.GradientID.IsEmpty and
+          FDocument.Gradients.TryGetValue(Element.Style.Stroke.GradientID, Definition) then
+        begin
+          var Bounds := Path.GetBounds;
+          Stroke.Kind := TBrushKind.Gradient;
+          if Definition.Kind = sgRadial then
+          begin
+            Stroke.Gradient.Style := TGradientStyle.Radial;
+            if Definition.UnitsUserSpace then
+            begin
+              var GradientMatrix := ViewMatrix * Element.Matrix * Definition.Matrix;
+              var P := GradientMatrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
+              Stroke.Gradient.RadialTransform.RotationCenter.Point :=
+                PointF((P.X - Bounds.Left) / Bounds.Width, (P.Y - Bounds.Top) / Bounds.Height);
+              Stroke.Gradient.RadialTransform.RotationAngle :=
+                RadToDeg(ArcTan2(GradientMatrix.B, GradientMatrix.A));
+              Stroke.Gradient.RadialTransform.Scale.X :=
+                Sqrt(Sqr(GradientMatrix.A) + Sqr(GradientMatrix.B)) / Max(Bounds.Width / 2, 0.0001);
+              Stroke.Gradient.RadialTransform.Scale.Y :=
+                Sqrt(Sqr(GradientMatrix.C) + Sqr(GradientMatrix.D)) / Max(Bounds.Height / 2, 0.0001);
+            end
+            else
+            begin
+              Stroke.Gradient.RadialTransform.RotationCenter.Point :=
+                Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
+              Stroke.Gradient.RadialTransform.RotationAngle := 0;
+              Stroke.Gradient.RadialTransform.Scale.X := 1;
+              Stroke.Gradient.RadialTransform.Scale.Y := 1;
+            end;
+          end
+          else
+          begin
+            Stroke.Gradient.Style := TGradientStyle.Linear;
+            if Definition.UnitsUserSpace then
+            begin
+              var StartPoint := (ViewMatrix * Element.Matrix * Definition.Matrix).
+                TransformPoint(PointF(Definition.X1, Definition.Y1));
+              var StopPoint := (ViewMatrix * Element.Matrix * Definition.Matrix).
+                TransformPoint(PointF(Definition.X2, Definition.Y2));
+              Stroke.Gradient.StartPosition.Point :=
+                PointF((StartPoint.X - Bounds.Left) / Bounds.Width,
+                  (StartPoint.Y - Bounds.Top) / Bounds.Height);
+              Stroke.Gradient.StopPosition.Point :=
+                PointF((StopPoint.X - Bounds.Left) / Bounds.Width,
+                  (StopPoint.Y - Bounds.Top) / Bounds.Height);
+            end
+            else
+            begin
+              Stroke.Gradient.StartPosition.Point :=
+                Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
+              Stroke.Gradient.StopPosition.Point :=
+                Definition.Matrix.TransformPoint(PointF(Definition.X2, Definition.Y2));
+            end;
+          end;
+          Stroke.Gradient.Points.Clear;
+          for var I := 0 to Definition.Gradient.Points.Count - 1 do
+          begin
+            var SourceIndex := I;
+            if Definition.Kind = sgRadial then
+              SourceIndex := Definition.Gradient.Points.Count - 1 - I;
+            var Source := Definition.Gradient.Points[SourceIndex];
+            var Target := TGradientPoint(Stroke.Gradient.Points.Add);
+            if Definition.Kind = sgRadial then
+              Target.Offset := 1 - Source.Offset
+            else
+              Target.Offset := Source.Offset;
+            Target.Color := AlphaColorWithOpacity(Source.Color, Element.Style.StrokeOpacity);
+          end;
+        end
+        else
+          Stroke.Color := AlphaColorWithOpacity(Element.Style.Stroke.Color, Element.Style.StrokeOpacity);
         Stroke.Thickness := Element.Style.StrokeWidth;
         Stroke.Cap := Element.Style.StrokeCap;
         Stroke.Join := Element.Style.StrokeJoin;
