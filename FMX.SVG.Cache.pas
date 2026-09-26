@@ -1,4 +1,4 @@
-unit FMX.SVG.Cache;
+﻿unit FMX.SVG.Cache;
 
 interface
 

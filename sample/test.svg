@@ -1,0 +1,477 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="1200" height="1000" viewBox="0 0 1200 1000"
+     preserveAspectRatio="xMidYMid meet">
+
+  <title>SVG ALL FEATURES — comprehensive SVG renderer test</title>
+  <desc>
+    A self-contained SVG intended to exercise a large range of SVG 1.1 features:
+    shapes, all path commands, transforms, gradients, patterns, markers,
+    clipping, masking, filters, text, textPath, symbols, use, CSS and animation.
+  </desc>
+
+  <metadata>
+    <test name="SVG_ALL_FEATURES" version="1.0"/>
+  </metadata>
+
+  <style>
+    .panel { fill:#101827; stroke:#4b5563; stroke-width:2; }
+    .label { fill:#f8fafc; font-family:sans-serif; font-size:16px; }
+    .small { fill:#cbd5e1; font-family:sans-serif; font-size:12px; }
+    .outline { fill:none; stroke:#f8fafc; stroke-width:3; }
+    .accent { fill:#38bdf8; stroke:#e0f2fe; stroke-width:2; }
+    .warning { fill:#f59e0b; stroke:#fef3c7; stroke-width:2; }
+    .danger { fill:#ef4444; stroke:#fee2e2; stroke-width:2; }
+    .green { fill:#22c55e; stroke:#dcfce7; stroke-width:2; }
+    .thin { stroke-width:1; }
+  </style>
+
+  <defs>
+
+    <!-- Linear gradients -->
+    <linearGradient id="lg1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00c6ff"/>
+      <stop offset="45%" stop-color="#7c3aed" stop-opacity=".85"/>
+      <stop offset="100%" stop-color="#ff006e"/>
+    </linearGradient>
+
+    <linearGradient id="lgReflect" x1="0" y1="0" x2="1" y2="0"
+                    spreadMethod="reflect">
+      <stop offset="0" stop-color="#f97316"/>
+      <stop offset=".5" stop-color="#fde047"/>
+      <stop offset="1" stop-color="#22c55e"/>
+    </linearGradient>
+
+    <linearGradient id="lgRepeat" x1="0" y1="0" x2=".15" y2="0"
+                    spreadMethod="repeat">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset=".5" stop-color="#93c5fd"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+
+    <linearGradient id="lgTransform" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="0" x2="300" y2="0"
+                    gradientTransform="rotate(12)">
+      <stop offset="0" stop-color="#ec4899"/>
+      <stop offset=".5" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+
+    <!-- Radial gradients -->
+    <radialGradient id="rg1" cx="35%" cy="30%" r="70%" fx="30%" fy="25%">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".18" stop-color="#fef08a"/>
+      <stop offset=".55" stop-color="#fb923c"/>
+      <stop offset="1" stop-color="#dc2626"/>
+    </radialGradient>
+
+    <radialGradient id="rgUserSpace" gradientUnits="userSpaceOnUse"
+                    cx="100" cy="100" r="90">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset=".5" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#1e3a8a"/>
+    </radialGradient>
+
+    <!-- Pattern -->
+    <pattern id="pattern1" width="24" height="24" patternUnits="userSpaceOnUse"
+             patternTransform="rotate(15)">
+      <rect width="24" height="24" fill="#172554"/>
+      <circle cx="6" cy="6" r="4" fill="#60a5fa"/>
+      <path d="M0 18 L6 24 M18 0 L24 6" stroke="#93c5fd" stroke-width="2"/>
+    </pattern>
+
+    <pattern id="pattern2" x="0" y="0" width=".1" height=".1"
+             patternUnits="objectBoundingBox">
+      <rect width="100%" height="100%" fill="#312e81"/>
+      <circle cx="50%" cy="50%" r="35%" fill="#a78bfa"/>
+    </pattern>
+
+    <!-- Marker -->
+    <marker id="arrow" markerWidth="12" markerHeight="12"
+            refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#f8fafc"/>
+    </marker>
+
+    <marker id="diamond" markerWidth="10" markerHeight="10"
+            refX="5" refY="5" orient="auto">
+      <path d="M5,0 L10,5 L5,10 L0,5 Z" fill="#facc15"/>
+    </marker>
+
+    <!-- Clip paths -->
+    <clipPath id="clipCircle">
+      <circle cx="600" cy="190" r="78"/>
+    </clipPath>
+
+    <clipPath id="clipComplex" clipPathUnits="userSpaceOnUse">
+      <path d="M820 120 h240 a30 30 0 0 1 30 30 v110 h-300 z"/>
+      <circle cx="950" cy="210" r="55"/>
+    </clipPath>
+
+    <!-- Mask -->
+    <mask id="mask1" maskUnits="userSpaceOnUse"
+          x="650" y="105" width="260" height="180">
+      <rect x="650" y="105" width="260" height="180" fill="black"/>
+      <radialGradient id="maskGradient">
+        <stop offset="0" stop-color="white"/>
+        <stop offset=".65" stop-color="#aaa"/>
+        <stop offset="1" stop-color="black"/>
+      </radialGradient>
+      <circle cx="780" cy="195" r="90" fill="url(#maskGradient)"/>
+    </mask>
+
+    <!-- Filter primitives -->
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="7" result="blur"/>
+      <feOffset in="blur" dx="7" dy="9" result="offset"/>
+      <feFlood flood-color="#000000" flood-opacity=".65" result="flood"/>
+      <feComposite in="flood" in2="offset" operator="in" result="shadow"/>
+      <feMerge>
+        <feMergeNode in="shadow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="colorMatrix">
+      <feColorMatrix type="matrix"
+        values="1 0 0 0 0
+                0 .2 0 0 0
+                0 0 1 0 0
+                0 0 0 1 0"/>
+    </filter>
+
+    <filter id="blend">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="b"/>
+      <feBlend in="SourceGraphic" in2="b" mode="screen"/>
+    </filter>
+
+    <filter id="composite">
+      <feFlood flood-color="#22d3ee" flood-opacity=".7" result="f"/>
+      <feComposite in="f" in2="SourceGraphic" operator="in" result="c"/>
+      <feOffset in="c" dx="5" dy="5"/>
+    </filter>
+
+    <filter id="morphology">
+      <feMorphology in="SourceGraphic" operator="dilate" radius="2"/>
+    </filter>
+
+    <filter id="turbulence">
+      <feTurbulence type="fractalNoise" baseFrequency=".035" numOctaves="2"
+                    seed="7" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise"
+                         scale="18" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+
+    <filter id="convolve">
+      <feConvolveMatrix order="3"
+        kernelMatrix="0 -1 0 -1 5 -1 0 -1 0"
+        preserveAlpha="true"/>
+    </filter>
+
+    <filter id="component">
+      <feComponentTransfer>
+        <feFuncR type="linear" slope="1.3" intercept="-.1"/>
+        <feFuncG type="gamma" amplitude="1" exponent=".8" offset="0"/>
+        <feFuncB type="table" tableValues="0 .2 .8 1"/>
+        <feFuncA type="identity"/>
+      </feComponentTransfer>
+    </filter>
+
+    <filter id="lighting">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur"/>
+      <feSpecularLighting in="blur" surfaceScale="4" specularConstant=".8"
+                          specularExponent="18" lighting-color="#ffffff"
+                          result="light">
+        <feDistantLight azimuth="225" elevation="55"/>
+      </feSpecularLighting>
+      <feComposite in="light" in2="SourceGraphic" operator="in"/>
+    </filter>
+
+    <filter id="pointLight">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="3"
+                         diffuseConstant="1" lighting-color="#ffffff">
+        <fePointLight x="600" y="400" z="80"/>
+      </feDiffuseLighting>
+    </filter>
+
+    <filter id="spotLight">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+                         diffuseConstant="1">
+        <feSpotLight x="600" y="300" z="100"
+                     pointsAtX="600" pointsAtY="500" pointsAtZ="0"
+                     limitingConeAngle="35"/>
+      </feDiffuseLighting>
+    </filter>
+
+    <!-- Symbol / reusable object -->
+    <symbol id="star" viewBox="0 0 100 100">
+      <path d="M50 5 L61 37 L95 38 L68 58 L77 92 L50 72 L23 92 L32 58 L5 38 L39 37 Z"
+            fill="url(#lg1)" stroke="#fff" stroke-width="4"/>
+    </symbol>
+
+    <g id="reusable">
+      <circle r="28" fill="url(#rg1)" stroke="#fff" stroke-width="3"/>
+      <path d="M-18 0 H18 M0 -18 V18" stroke="#fff" stroke-width="3"/>
+    </g>
+
+    <!-- Text path -->
+    <path id="textCurve" d="M80 870 C260 740 420 980 600 850 S930 740 1120 860"/>
+
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="1000" fill="#070b14"/>
+
+  <!-- Header -->
+  <rect x="20" y="20" width="1160" height="70" rx="15"
+        fill="url(#lg1)" filter="url(#shadow)"/>
+  <text x="600" y="64" text-anchor="middle"
+        font-family="sans-serif" font-size="30" font-weight="bold"
+        fill="white">SVG ALL FEATURES</text>
+
+  <!-- Basic shapes -->
+  <g transform="translate(30 110)">
+    <rect class="panel" width="340" height="210" rx="12"/>
+    <text class="label" x="18" y="28">Basic shapes</text>
+
+    <rect x="20" y="45" width="65" height="42" fill="url(#lg1)" rx="8"/>
+    <circle cx="130" cy="66" r="25" fill="url(#rg1)"/>
+    <ellipse cx="205" cy="66" rx="40" ry="22" fill="url(#lgReflect)"/>
+    <line x1="260" y1="45" x2="320" y2="88"
+          stroke="#38bdf8" stroke-width="6" marker-end="url(#arrow)"/>
+    <polyline points="25,120 65,95 105,135 145,105 185,145"
+              fill="none" stroke="#f472b6" stroke-width="5"
+              marker-mid="url(#diamond)"/>
+    <polygon points="225,105 260,130 245,170 205,170 190,130"
+             fill="url(#pattern1)" stroke="#fff" stroke-width="3"/>
+    <rect x="270" y="115" width="45" height="60"
+          fill="url(#pattern2)" transform="rotate(18 292 145)"/>
+  </g>
+
+  <!-- All path commands -->
+  <g transform="translate(390 110)">
+    <rect class="panel" width="390" height="210" rx="12"/>
+    <text class="label" x="18" y="28">All path commands</text>
+
+    <!-- M L H V C S Q T A Z -->
+    <path d="
+      M 20 75
+      L 65 45
+      H 105
+      V 80
+      C 125 120 160 120 180 80
+      S 235 40 255 80
+      Q 275 120 295 80
+      T 335 80
+      A 28 28 0 0 1 365 115
+      L 340 160
+      H 25
+      Z"
+      fill="url(#lgTransform)" stroke="#fff" stroke-width="3"/>
+    <!-- relative commands -->
+    <path d="m35 180 l35 -18 h35 v18 c15 20 30 20 45 0 s30 -20 45 0
+             q15 20 30 0 t30 0 a15 15 0 0 1 30 0"
+          fill="none" stroke="#facc15" stroke-width="3"/>
+  </g>
+
+  <!-- Transforms -->
+  <g transform="translate(800 110)">
+    <rect class="panel" width="370" height="210" rx="12"/>
+    <text class="label" x="18" y="28">Transforms</text>
+
+    <g transform="translate(70 90)">
+      <rect x="-30" y="-20" width="60" height="40"
+            fill="#38bdf8" transform="rotate(20)"/>
+    </g>
+    <g transform="translate(185 90) scale(1.15 .8)">
+      <circle r="32" fill="#f97316" transform="rotate(-20)"/>
+    </g>
+    <g transform="translate(290 90) skewX(18)">
+      <rect x="-30" y="-25" width="60" height="50" fill="#22c55e"/>
+    </g>
+    <g transform="translate(100 165) skewY(-15)">
+      <polygon points="-35,0 0,-30 35,0 0,30" fill="#a78bfa"/>
+    </g>
+    <g transform="matrix(.8 .3 -.2 .9 270 160)">
+      <rect x="-40" y="-20" width="80" height="40" fill="url(#lg1)"/>
+    </g>
+  </g>
+
+  <!-- Clip and mask -->
+  <g transform="translate(30 340)">
+    <rect class="panel" width="390" height="220" rx="12"/>
+    <text class="label" x="18" y="28">clipPath + mask</text>
+
+    <g clip-path="url(#clipCircle)">
+      <rect x="35" y="55" width="155" height="155" fill="url(#lg1)"/>
+      <circle cx="115" cy="130" r="65" fill="url(#rg1)"/>
+      <path d="M20 200 Q110 50 205 200" fill="none"
+            stroke="#fff" stroke-width="12"/>
+    </g>
+
+    <g mask="url(#mask1)">
+      <rect x="220" y="55" width="150" height="145" fill="url(#lg1)"/>
+      <circle cx="295" cy="125" r="70" fill="url(#rg1)"/>
+    </g>
+  </g>
+
+  <!-- Gradients -->
+  <g transform="translate(440 340)">
+    <rect class="panel" width="350" height="220" rx="12"/>
+    <text class="label" x="18" y="28">Gradients / patterns</text>
+
+    <rect x="20" y="50" width="145" height="55" fill="url(#lgRepeat)"/>
+    <rect x="185" y="50" width="145" height="55" fill="url(#lgReflect)"/>
+    <circle cx="90" cy="165" r="55" fill="url(#rgUserSpace)"/>
+    <circle cx="230" cy="165" r="55" fill="url(#rg1)"/>
+  </g>
+
+  <!-- Markers -->
+  <g transform="translate(810 340)">
+    <rect class="panel" width="360" height="220" rx="12"/>
+    <text class="label" x="18" y="28">Markers / dash arrays</text>
+
+    <path d="M25 75 C90 25 135 125 200 75 S300 25 335 75"
+          fill="none" stroke="#38bdf8" stroke-width="6"
+          stroke-dasharray="12 8" stroke-dashoffset="4"
+          stroke-linecap="round"
+          marker-start="url(#diamond)"
+          marker-mid="url(#diamond)"
+          marker-end="url(#arrow)"/>
+
+    <path d="M25 150 L335 150"
+          stroke="#f97316" stroke-width="5"
+          stroke-dasharray="2 10"
+          stroke-linecap="round"/>
+  </g>
+
+  <!-- Filters -->
+  <g transform="translate(30 580)">
+    <rect class="panel" width="1110" height="210" rx="12"/>
+    <text class="label" x="18" y="28">Filters: blur / color / blend / composite / morphology / turbulence / convolve / lighting</text>
+
+    <g transform="translate(45 55)">
+      <circle r="35" fill="#38bdf8" filter="url(#shadow)"/>
+      <text class="small" x="-28" y="65">shadow</text>
+    </g>
+
+    <g transform="translate(170 55)">
+      <circle r="35" fill="#f43f5e" filter="url(#colorMatrix)"/>
+      <text class="small" x="-34" y="65">matrix</text>
+    </g>
+
+    <g transform="translate(295 55)">
+      <circle r="35" fill="#22c55e" filter="url(#blend)"/>
+      <text class="small" x="-27" y="65">blend</text>
+    </g>
+
+    <g transform="translate(420 55)">
+      <circle r="35" fill="#facc15" filter="url(#composite)"/>
+      <text class="small" x="-37" y="65">composite</text>
+    </g>
+
+    <g transform="translate(545 55)">
+      <circle r="35" fill="#a78bfa" filter="url(#morphology)"/>
+      <text class="small" x="-38" y="65">morphology</text>
+    </g>
+
+    <g transform="translate(670 55)">
+      <circle r="35" fill="#fb923c" filter="url(#turbulence)"/>
+      <text class="small" x="-35" y="65">turbulence</text>
+    </g>
+
+    <g transform="translate(795 55)">
+      <rect x="-38" y="-35" width="76" height="70"
+            fill="#60a5fa" filter="url(#convolve)"/>
+      <text class="small" x="-30" y="65">convolve</text>
+    </g>
+
+    <g transform="translate(920 55)">
+      <circle r="35" fill="#e879f9" filter="url(#component)"/>
+      <text class="small" x="-32" y="65">transfer</text>
+    </g>
+
+    <g transform="translate(1035 55)">
+      <circle r="35" fill="#e2e8f0" filter="url(#lighting)"/>
+      <text class="small" x="-30" y="65">lighting</text>
+    </g>
+
+    <g transform="translate(145 145)">
+      <rect x="-55" y="-30" width="110" height="60"
+            fill="#38bdf8" filter="url(#pointLight)"/>
+    </g>
+    <g transform="translate(380 145)">
+      <rect x="-55" y="-30" width="110" height="60"
+            fill="#f472b6" filter="url(#spotLight)"/>
+    </g>
+
+    <text class="small" x="540" y="150">
+      Filter primitives are intentionally combined with normal paint operations.
+    </text>
+  </g>
+
+  <!-- Use / symbol / nested coordinate systems -->
+  <g transform="translate(30 810)">
+    <rect class="panel" width="350" height="160" rx="12"/>
+    <text class="label" x="18" y="28">use / symbol / defs</text>
+
+    <use href="#star" x="25" y="45" width="70" height="70"/>
+    <use xlink:href="#star" x="105" y="45" width="70" height="70"
+         transform="rotate(15 140 80)"/>
+    <g transform="translate(240 80)">
+      <use xlink:href="#reusable"/>
+    </g>
+  </g>
+
+  <!-- Text -->
+  <g transform="translate(400 810)">
+    <rect class="panel" width="740" height="160" rx="12"/>
+    <text class="label" x="18" y="28">text / tspan / textPath / CSS</text>
+
+    <text x="25" y="62" class="label" font-size="22">
+      SVG
+      <tspan fill="#38bdf8" font-weight="bold"> text </tspan>
+      <tspan fill="#f97316" font-style="italic">features</tspan>
+    </text>
+
+    <text font-family="serif" font-size="17" fill="#a78bfa">
+      <textPath href="#textCurve" startOffset="0%">
+        Text rendered along a Bézier curve — textPath + path geometry
+      </textPath>
+    </text>
+
+    <text x="25" y="135" class="small"
+          textLength="300" lengthAdjust="spacingAndGlyphs">
+      textLength / lengthAdjust
+    </text>
+  </g>
+
+  <!-- Extra complex clipping region -->
+  <g clip-path="url(#clipComplex)" opacity=".35">
+    <rect x="820" y="120" width="270" height="150"
+          fill="url(#lg1)"/>
+  </g>
+
+  <!-- Animation attributes -->
+  <g id="animationTest">
+    <circle cx="1140" cy="930" r="12" fill="#38bdf8">
+      <animate attributeName="r" values="12;20;12" dur="2s"
+               repeatCount="indefinite"/>
+      <animateTransform attributeName="transform"
+                        type="rotate" from="0 1140 930"
+                        to="360 1140 930" dur="4s"
+                        repeatCount="indefinite"/>
+    </circle>
+    <rect x="1080" y="910" width="30" height="30" fill="#f97316">
+      <animate attributeName="opacity" from="1" to=".2"
+               dur="1.5s" repeatCount="indefinite"/>
+      <set attributeName="fill" to="#22c55e" begin="1s"/>
+    </rect>
+  </g>
+
+  <!-- Final foreground decorative paths -->
+  <path d="M20 985 C150 930 260 1010 390 965 S650 930 780 980 S1040 1010 1180 955"
+        fill="none" stroke="url(#lg1)" stroke-width="5"
+        stroke-linecap="round"/>
+
+</svg>
