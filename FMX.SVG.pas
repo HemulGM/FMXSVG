@@ -1,4 +1,4 @@
-unit FMX.SVG;
+﻿unit FMX.SVG;
 
 interface
 

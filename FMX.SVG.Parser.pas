@@ -4,8 +4,8 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Types, System.Math, System.UITypes,
-  System.Generics.Collections, Xml.XMLDoc, Xml.XMLIntf, FMX.Graphics,
-  FMX.SVG.Types;
+  System.Variants, System.Generics.Collections, Xml.XMLDoc, Xml.XMLIntf,
+  FMX.Graphics, FMX.SVG.Types;
 
 type
   TSvgNumberParser = record
@@ -1029,8 +1029,7 @@ begin
   S := Attr(Node, 'stroke-dashoffset');
   if not S.IsEmpty then
     ApplyStyleDeclaration('stroke-dashoffset:' + S, Result);
-  for var Name in ['font-family', 'font-size', 'font-weight', 'font-style',
-    'text-decoration', 'text-anchor'] do
+  for var Name in ['font-family', 'font-size', 'font-weight', 'font-style', 'text-decoration', 'text-anchor'] do
   begin
     S := Attr(Node, Name);
     if not S.IsEmpty then
@@ -1371,8 +1370,11 @@ end;
 
 function TSvgDocument.TextContent(const Node: IXMLNode): string;
 begin
-  if Node.ChildNodes.Count = 0 then
-    Exit(Node.Text);
+  { IXMLNode.Text for an element may already contain the concatenated text of
+    all descendants. Reading it while also traversing children duplicates text
+    in mixed <text> / <tspan> content. Only text and CDATA nodes own text. }
+  if Node.NodeType in [ntText, ntCData] then
+    Exit(VarToStr(Node.NodeValue));
 
   for var i := 0 to Node.ChildNodes.Count - 1 do
     Result := Result + TextContent(Node.ChildNodes[i]);
@@ -1454,12 +1456,18 @@ begin
 
   Element.TextRuns.Clear;
   var PendingSpace := False;
+  var ParsedText := '';
   for var i := 0 to Node.ChildNodes.Count - 1 do
   begin
     var Child := Node.ChildNodes[i];
     var RawText := TextContent(Child).Replace(#13, ' ').Replace(#10, ' ').Replace(#9, ' ');
     while RawText.Contains('  ') do
       RawText := RawText.Replace('  ', ' ');
+    { Some XML DOM providers return each mixed-content child as the complete
+      text accumulated up to that child. Keep only its not-yet-parsed suffix. }
+    var ComparableText := RawText.Trim;
+    if not ParsedText.IsEmpty and ComparableText.StartsWith(ParsedText) then
+      RawText := ComparableText.Substring(ParsedText.Length);
     if RawText.Trim.IsEmpty then
     begin
       PendingSpace := PendingSpace or not RawText.IsEmpty;
@@ -1494,6 +1502,9 @@ begin
       Element.FontStyle := ParentFontStyle;
     end;
     Element.TextRuns.Add(Run);
+    if Run.Text.StartsWith(' ') then
+      ParsedText := ParsedText + ' ';
+    ParsedText := ParsedText + Run.Text.Trim;
     PendingSpace := RawText.EndsWith(' ');
   end;
   Element.Text := '';
@@ -1982,5 +1993,6 @@ begin
 
   ParseNode(Xml.DocumentElement, TSvgMatrix.Identity, TSvgStyle.Default);
 end;
+
 end.
 
