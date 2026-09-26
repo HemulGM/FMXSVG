@@ -1450,6 +1450,13 @@ begin
     Element.Text := Element.Text.Replace('  ', ' ');
   Element.Text := Element.Text.Trim;
   Element.TextPosition := PointF(LengthAttr(Node, 'x', FWidth), LengthAttr(Node, 'y', FHeight));
+  Element.HasTextLength := Node.HasAttribute('textLength');
+  if Element.HasTextLength then
+    Element.TextLength := LengthAttr(Node, 'textLength', FWidth);
+  if SameText(Attr(Node, 'lengthAdjust'), 'spacingAndGlyphs') then
+    Element.LengthAdjust := slaSpacingAndGlyphs
+  else
+    Element.LengthAdjust := slaSpacing;
   Element.FontFamily := Element.Style.FontFamily;
   Element.FontSize := Element.Style.FontSize;
   Element.FontStyle := Element.Style.FontStyle;

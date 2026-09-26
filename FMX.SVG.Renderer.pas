@@ -69,6 +69,19 @@ begin
     Result := Family.Trim(['''', '"']);
 end;
 
+function ToCanvasMatrix(const Matrix: TSvgMatrix): TMatrix;
+begin
+  { TMatrix uses row vectors, while TSvgMatrix stores the SVG affine form.
+    Map the coefficients explicitly so text is transformed as geometry is. }
+  Result := TMatrix.Identity;
+  Result.m11 := Matrix.A;
+  Result.m12 := Matrix.B;
+  Result.m21 := Matrix.C;
+  Result.m22 := Matrix.D;
+  Result.m31 := Matrix.E;
+  Result.m32 := Matrix.F;
+end;
+
 function InvertMatrix(const Matrix: TSvgMatrix; out Inverse: TSvgMatrix): Boolean;
 begin
   var Determinant := Matrix.A * Matrix.D - Matrix.B * Matrix.C;
@@ -549,68 +562,120 @@ begin
       end;
       Exit;
     end;
-    var Position := TextMatrix.TransformPoint(Element.TextPosition);
-    { A geometric-mean scale prevents the horizontal component of a
-      non-uniform transform from stretching the font metrics vertically. }
-    var TextScale := Sqrt(Abs(TextMatrix.A * TextMatrix.D - TextMatrix.B * TextMatrix.C));
-    if TextScale <= 0 then
-      TextScale := 1;
-    var FontSize := Element.FontSize * TextScale;
-    SetTextFont(Element.FontFamily, FontSize, Element.FontStyle);
-    Canvas.Fill.Kind := TBrushKind.Solid;
-    Canvas.Fill.Color := AlphaColorWithOpacity(Element.Style.Fill.Color, Element.Style.FillOpacity);
-    var Align := TTextAlign.Leading;
-    var TextRect: TRectF;
-    var TextHeight := Canvas.TextHeight(Element.Text);
-    { SVG y denotes the baseline, whereas FMX positions text in a rectangle.
-      Most fonts reserve roughly one fifth of the em below the baseline. }
-    var BaselineOffset := FontSize * 0.22;
-    var TextWidth := Canvas.TextWidth(Element.Text);
+    { Unlike paths, FMX does not receive a pre-transformed text outline.
+      Keep layout in SVG user coordinates and transform the canvas instead;
+      this preserves rotate, skew and non-uniform scale on the glyphs. }
+    var LayoutMatrix := TextMatrix;
+    var LayoutText := Element.Text;
     if Element.TextRuns.Count > 0 then
     begin
-      TextWidth := 0;
+      LayoutText := '';
       for var Run in Element.TextRuns do
-      begin
-        SetTextFont(Run.FontFamily, Run.FontSize * TextScale, Run.FontStyle);
-        TextWidth := TextWidth + Canvas.TextWidth(Run.Text);
-      end;
-      SetTextFont(Element.FontFamily, FontSize, Element.FontStyle);
+        LayoutText := LayoutText + Run.Text;
     end;
-    if Element.TextAnchor = 'middle' then
-    begin
-      Align := TTextAlign.Center;
-      TextRect := RectF(Position.X - 5000, Position.Y - TextHeight + BaselineOffset,
-        Position.X + 5000, Position.Y + BaselineOffset);
-    end
-    else if Element.TextAnchor = 'end' then
-    begin
-      Align := TTextAlign.Trailing;
-      TextRect := RectF(Position.X - 10000, Position.Y - TextHeight + BaselineOffset,
-        Position.X, Position.Y + BaselineOffset);
-    end
-    else
-      TextRect := RectF(Position.X, Position.Y - TextHeight + BaselineOffset,
-        Position.X + 10000, Position.Y + BaselineOffset);
+    var NaturalTextWidth := 0.0;
     if Element.TextRuns.Count = 0 then
-      Canvas.FillText(TextRect, Element.Text, False, EnsureRange(Element.Style.Opacity, 0, 1), [], Align, TTextAlign.Trailing)
-    else
     begin
-      var X := Position.X;
-      if Element.TextAnchor = 'middle' then
-        X := X - TextWidth / 2
-      else if Element.TextAnchor = 'end' then
-        X := X - TextWidth;
+      SetTextFont(Element.FontFamily, Element.FontSize, Element.FontStyle);
+      NaturalTextWidth := Canvas.TextWidth(LayoutText);
+    end
+    else
       for var Run in Element.TextRuns do
       begin
-        var RunFontSize := Run.FontSize * TextScale;
-        SetTextFont(Run.FontFamily, RunFontSize, Run.FontStyle);
+        SetTextFont(Run.FontFamily, Run.FontSize, Run.FontStyle);
+        NaturalTextWidth := NaturalTextWidth + Canvas.TextWidth(Run.Text);
+      end;
+    var LayoutWidth := NaturalTextWidth;
+    var CharacterSpacing := 0.0;
+    if Element.HasTextLength and (LayoutText.Length > 0) then
+    begin
+      if Element.LengthAdjust = slaSpacingAndGlyphs then
+      begin
+        if NaturalTextWidth > 0.0001 then
+        begin
+          LayoutMatrix := TextMatrix * TSvgMatrix.Scaling(Element.TextLength / NaturalTextWidth, 1);
+          LayoutWidth := Element.TextLength;
+        end;
+      end
+      else if LayoutText.Length > 1 then
+      begin
+        CharacterSpacing := (Element.TextLength - NaturalTextWidth) / (LayoutText.Length - 1);
+        LayoutWidth := Element.TextLength;
+      end;
+    end;
+    var X := Element.TextPosition.X;
+    if Element.TextAnchor = 'middle' then
+      X := X - LayoutWidth / 2
+    else if Element.TextAnchor = 'end' then
+      X := X - LayoutWidth;
+    Canvas.SetMatrix(ToCanvasMatrix(LayoutMatrix));
+    Canvas.Fill.Kind := TBrushKind.Solid;
+    Canvas.Fill.Color := AlphaColorWithOpacity(Element.Style.Fill.Color, Element.Style.FillOpacity);
+    { SVG y denotes the baseline, whereas FMX positions text in a rectangle.
+      Most fonts reserve roughly one fifth of the em below the baseline. }
+    if not Element.HasTextLength then
+    begin
+      if Element.TextRuns.Count = 0 then
+      begin
+        SetTextFont(Element.FontFamily, Element.FontSize, Element.FontStyle);
+        var TextHeight := Canvas.TextHeight(LayoutText);
+        var BaselineOffset := Element.FontSize * 0.22;
+        var TextRect := RectF(X, Element.TextPosition.Y - TextHeight + BaselineOffset,
+          X + NaturalTextWidth, Element.TextPosition.Y + BaselineOffset);
+        Canvas.FillText(TextRect, LayoutText, False,
+          EnsureRange(Element.Style.Opacity, 0, 1), [], TTextAlign.Leading, TTextAlign.Trailing);
+      end;
+      for var Run in Element.TextRuns do
+      begin
+        SetTextFont(Run.FontFamily, Run.FontSize, Run.FontStyle);
         Canvas.Fill.Color := AlphaColorWithOpacity(Run.Style.Fill.Color, Run.Style.FillOpacity);
         var RunHeight := Canvas.TextHeight(Run.Text);
-        var RunRect := RectF(X, Position.Y - RunHeight + RunFontSize * 0.22,
-          X + Canvas.TextWidth(Run.Text), Position.Y + RunFontSize * 0.22);
+        var RunWidth := Canvas.TextWidth(Run.Text);
+        var RunRect := RectF(X, Element.TextPosition.Y - RunHeight + Run.FontSize * 0.22,
+          X + RunWidth, Element.TextPosition.Y + Run.FontSize * 0.22);
         Canvas.FillText(RunRect, Run.Text, False, EnsureRange(Run.Style.Opacity, 0, 1), [],
           TTextAlign.Leading, TTextAlign.Trailing);
         X := RunRect.Right;
+      end;
+    end;
+    if Element.HasTextLength then
+    begin
+      var RunIndex := 0;
+      var RunCharacter := 1;
+      for var I := 1 to LayoutText.Length do
+      begin
+        var GlyphText := string(LayoutText[I]);
+        var GlyphStyle := Element.Style;
+        var GlyphFamily := Element.FontFamily;
+        var GlyphFontSize := Element.FontSize;
+        var GlyphFontStyle := Element.FontStyle;
+        if Element.TextRuns.Count > 0 then
+        begin
+          while (RunIndex < Element.TextRuns.Count) and
+            (RunCharacter > Element.TextRuns[RunIndex].Text.Length) do
+          begin
+            Inc(RunIndex);
+            RunCharacter := 1;
+          end;
+          if RunIndex < Element.TextRuns.Count then
+          begin
+            var Run := Element.TextRuns[RunIndex];
+            GlyphStyle := Run.Style;
+            GlyphFamily := Run.FontFamily;
+            GlyphFontSize := Run.FontSize;
+            GlyphFontStyle := Run.FontStyle;
+            Inc(RunCharacter);
+          end;
+        end;
+        SetTextFont(GlyphFamily, GlyphFontSize, GlyphFontStyle);
+        Canvas.Fill.Color := AlphaColorWithOpacity(GlyphStyle.Fill.Color, GlyphStyle.FillOpacity);
+        var GlyphWidth := Canvas.TextWidth(GlyphText);
+        var GlyphHeight := Canvas.TextHeight(GlyphText);
+        var GlyphRect := RectF(X, Element.TextPosition.Y - GlyphHeight + GlyphFontSize * 0.22,
+          X + GlyphWidth, Element.TextPosition.Y + GlyphFontSize * 0.22);
+        Canvas.FillText(GlyphRect, GlyphText, False, EnsureRange(GlyphStyle.Opacity, 0, 1), [],
+          TTextAlign.Leading, TTextAlign.Trailing);
+        X := X + GlyphWidth + CharacterSpacing;
       end;
     end;
     finally

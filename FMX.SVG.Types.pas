@@ -97,6 +97,8 @@ type
     class function Default: TSvgStyle; static;
   end;
 
+  TSvgLengthAdjust = (slaSpacing, slaSpacingAndGlyphs);
+
   TSvgTextRun = class
   public
     Text: string;
@@ -131,6 +133,9 @@ type
     TextPath: TSvgTextPath;
     TextPathStartOffset: Single;
     TextPathStartOffsetIsPercent: Boolean;
+    TextLength: Single;
+    HasTextLength: Boolean;
+    LengthAdjust: TSvgLengthAdjust;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -507,6 +512,9 @@ begin
   TextRuns := TObjectList<TSvgTextRun>.Create(True);
   TextPathStartOffset := 0;
   TextPathStartOffsetIsPercent := False;
+  TextLength := 0;
+  HasTextLength := False;
+  LengthAdjust := slaSpacing;
 end;
 
 destructor TSvgElement.Destroy;
