@@ -3,7 +3,7 @@
 interface
 
 uses
-  System.SysUtils, System.Classes, System.Types, System.UITypes, FMX.Types,
+  System.SysUtils, System.Classes, System.Types, System.UITypes, System.Generics.Collections, FMX.Types,
   FMX.Graphics, FMX.SVG.Parser, FMX.SVG.Types;
 
 type
@@ -12,11 +12,17 @@ type
     FDocument: TSvgDocument;
     FBitmap: TBitmap;
     FRenderScale: Single;
+    FPath, FMarkerPath, FPatternPath: TPathData;
+    FFillBrush: TBrush;
+    FStrokeBrush: TStrokeBrush;
+    FPatternBrushes: TObjectList<TBrush>;
+    FPatternBrushIndex: Integer;
     function GetContentMatrix: TSvgMatrix;
     procedure RenderMidMarkers(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
     procedure RenderMarker(const Canvas: TCanvas; Marker: TSvgMarker; const Position: TPointF; Angle, Scale: Single);
     procedure RenderEndpointMarker(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix; const MarkerID: string; const FromPoint, ToPoint: TPointF; IsStart: Boolean);
-    procedure RenderPattern(const Canvas: TCanvas; Pattern: TSvgPattern; Element: TSvgElement; const ViewMatrix: TSvgMatrix; const Bounds: TRectF);
+    function RenderPattern(Pattern: TSvgPattern; Element: TSvgElement; const ViewMatrix: TSvgMatrix;
+      const Bounds: TRectF; out Brush: TBrush): Boolean;
     procedure RenderElement(const Canvas: TCanvas; Element: TSvgElement; const ViewMatrix: TSvgMatrix);
   public
     constructor Create;
@@ -28,7 +34,7 @@ type
 implementation
 
 uses
-  System.Math, System.Generics.Collections, System.Math.Vectors;
+  System.Math, System.Math.Vectors;
 
 function AlphaColorWithOpacity(Color: TAlphaColor; Opacity: Single): TAlphaColor;
 begin
@@ -123,98 +129,109 @@ begin
   Inverse.F := -(Inverse.B * Matrix.E + Inverse.D * Matrix.F);
 end;
 
-procedure TSvgRenderer.RenderPattern(const Canvas: TCanvas; Pattern: TSvgPattern; Element: TSvgElement; const ViewMatrix: TSvgMatrix; const Bounds: TRectF);
+function TSvgRenderer.RenderPattern(Pattern: TSvgPattern; Element: TSvgElement; const ViewMatrix: TSvgMatrix;
+  const Bounds: TRectF; out Brush: TBrush): Boolean;
 begin
+  Result := False;
+  Brush := nil;
   if (Pattern.Width <= 0) or (Pattern.Height <= 0) then
     Exit;
 
-  var PatternBitmap := TBitmap.Create(FBitmap.Width, FBitmap.Height);
-  try
-    var ContentMatrix := ViewMatrix * Element.Matrix;
-    var Inverse: TSvgMatrix;
-    var BoundsMatrix := ContentMatrix;
-    if Pattern.UnitsUserSpace then
-      BoundsMatrix := BoundsMatrix * Pattern.Matrix;
-    if not InvertMatrix(BoundsMatrix, Inverse) then
-      Exit;
-    var P1 := Inverse.TransformPoint(PointF(Bounds.Left, Bounds.Top));
-    var P2 := Inverse.TransformPoint(PointF(Bounds.Right, Bounds.Top));
-    var P3 := Inverse.TransformPoint(PointF(Bounds.Left, Bounds.Bottom));
-    var P4 := Inverse.TransformPoint(PointF(Bounds.Right, Bounds.Bottom));
-    var MinX := Min(Min(P1.X, P2.X), Min(P3.X, P4.X));
-    var MaxX := Max(Max(P1.X, P2.X), Max(P3.X, P4.X));
-    var MinY := Min(Min(P1.Y, P2.Y), Min(P3.Y, P4.Y));
-    var MaxY := Max(Max(P1.Y, P2.Y), Max(P3.Y, P4.Y));
-    var PatternMatrix := ContentMatrix * Pattern.Matrix;
-    var FirstX, LastX, FirstY, LastY: Integer;
-    if Pattern.UnitsUserSpace then
-    begin
-      FirstX := Floor(MinX / Pattern.Width) - 1;
-      LastX := Ceil(MaxX / Pattern.Width) + 1;
-      FirstY := Floor(MinY / Pattern.Height) - 1;
-      LastY := Ceil(MaxY / Pattern.Height) + 1;
-    end
-    else
-    begin
-      // The definition's coordinate system is normalized to the painted object's bounds.
-      PatternMatrix := ContentMatrix * TSvgMatrix.Translation(MinX, MinY) *
-        TSvgMatrix.Scaling(MaxX - MinX, MaxY - MinY) * Pattern.Matrix;
-      FirstX := -1;
-      LastX := Ceil(1 / Pattern.Width) + 1;
-      FirstY := -1;
-      LastY := Ceil(1 / Pattern.Height) + 1;
-    end;
-
-    PatternBitmap.Canvas.BeginScene;
-    try
-      PatternBitmap.Canvas.Clear(TAlphaColorRec.Null);
-      for var TileY := FirstY to LastY do
-        for var TileX := FirstX to LastX do
-          for var PatternElement in Pattern.Elements do
-          begin
-            if not PatternElement.Style.Visible then
-              Continue;
-            var TilePath := TPathData.Create;
-            try
-              PatternElement.Path.AppendTo(TilePath,
-                PatternMatrix * TSvgMatrix.Translation(
-                  TileX * Pattern.Width, TileY * Pattern.Height) * PatternElement.Matrix);
-              var Opacity := EnsureRange(PatternElement.Style.Opacity, 0, 1);
-              if PatternElement.Style.Fill.Enabled then
-              begin
-                PatternBitmap.Canvas.Fill.Kind := TBrushKind.Solid;
-                PatternBitmap.Canvas.Fill.Color := AlphaColorWithOpacity(
-                  PatternElement.Style.Fill.Color, PatternElement.Style.FillOpacity);
-                PatternBitmap.Canvas.FillPath(TilePath, Opacity);
-              end;
-              if PatternElement.Style.Stroke.Enabled and (PatternElement.Style.StrokeWidth > 0) then
-              begin
-                var Stroke := TStrokeBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
-                try
-                  Stroke.Color := AlphaColorWithOpacity(PatternElement.Style.Stroke.Color,
-                    PatternElement.Style.StrokeOpacity);
-                  Stroke.Thickness := PatternElement.Style.StrokeWidth *
-                    StrokeScale(PatternMatrix * PatternElement.Matrix);
-                  Stroke.Cap := PatternElement.Style.StrokeCap;
-                  Stroke.Join := PatternElement.Style.StrokeJoin;
-                  PatternBitmap.Canvas.DrawPath(TilePath, Opacity, Stroke);
-                finally
-                  Stroke.Free;
-                end;
-              end;
-            finally
-              TilePath.Free;
-            end;
-          end;
-    finally
-      PatternBitmap.Canvas.EndScene;
-    end;
-    Canvas.Fill.Kind := TBrushKind.Bitmap;
-    Canvas.Fill.Bitmap.Bitmap.Assign(PatternBitmap);
-    Canvas.Fill.Bitmap.WrapMode := TWrapMode.TileOriginal;
-  finally
-    PatternBitmap.Free;
+  var ContentMatrix := ViewMatrix * Element.Matrix;
+  var Inverse: TSvgMatrix;
+  var BoundsMatrix := ContentMatrix;
+  if Pattern.UnitsUserSpace then
+    BoundsMatrix := BoundsMatrix * Pattern.Matrix;
+  if not InvertMatrix(BoundsMatrix, Inverse) then
+    Exit;
+  var P1 := Inverse.TransformPoint(PointF(Bounds.Left, Bounds.Top));
+  var P2 := Inverse.TransformPoint(PointF(Bounds.Right, Bounds.Top));
+  var P3 := Inverse.TransformPoint(PointF(Bounds.Left, Bounds.Bottom));
+  var P4 := Inverse.TransformPoint(PointF(Bounds.Right, Bounds.Bottom));
+  var MinX := Min(Min(P1.X, P2.X), Min(P3.X, P4.X));
+  var MaxX := Max(Max(P1.X, P2.X), Max(P3.X, P4.X));
+  var MinY := Min(Min(P1.Y, P2.Y), Min(P3.Y, P4.Y));
+  var MaxY := Max(Max(P1.Y, P2.Y), Max(P3.Y, P4.Y));
+  var PatternMatrix := ContentMatrix * Pattern.Matrix;
+  var FirstX, LastX, FirstY, LastY: Integer;
+  if Pattern.UnitsUserSpace then
+  begin
+    FirstX := Floor(MinX / Pattern.Width) - 1;
+    LastX := Ceil(MaxX / Pattern.Width) + 1;
+    FirstY := Floor(MinY / Pattern.Height) - 1;
+    LastY := Ceil(MaxY / Pattern.Height) + 1;
+  end
+  else
+  begin
+    // The definition's coordinate system is normalized to the painted object's bounds.
+    PatternMatrix := ContentMatrix * TSvgMatrix.Translation(MinX, MinY) *
+      TSvgMatrix.Scaling(MaxX - MinX, MaxY - MinY) * Pattern.Matrix;
+    FirstX := -1;
+    LastX := Ceil(1 / Pattern.Width) + 1;
+    FirstY := -1;
+    LastY := Ceil(1 / Pattern.Height) + 1;
   end;
+
+  { Paint directly into the bitmap owned by the brush.  Each fill needs its
+    own bitmap until the destination EndScene: backends can defer drawing,
+    so repainting a shared texture would overwrite earlier pattern fills.
+    Reuse the pool on the next rasterization after that scene has ended. }
+  if FPatternBrushIndex = FPatternBrushes.Count then
+  begin
+    var NewBrush := TBrush.Create(TBrushKind.Bitmap, TAlphaColorRec.Null);
+    try
+      NewBrush.Bitmap.WrapMode := TWrapMode.TileOriginal;
+      FPatternBrushes.Add(NewBrush);
+    except
+      NewBrush.Free;
+      raise;
+    end;
+  end;
+  Brush := FPatternBrushes[FPatternBrushIndex];
+  Inc(FPatternBrushIndex);
+  var PatternBitmap := Brush.Bitmap.Bitmap;
+  if (PatternBitmap.Width <> FBitmap.Width) or (PatternBitmap.Height <> FBitmap.Height) then
+    PatternBitmap.SetSize(FBitmap.Width, FBitmap.Height);
+  if not PatternBitmap.Canvas.BeginScene then
+    raise EInvalidOperation.Create('Cannot begin SVG pattern scene');
+  try
+    PatternBitmap.Canvas.Clear(TAlphaColorRec.Null);
+    for var TileY := FirstY to LastY do
+      for var TileX := FirstX to LastX do
+        for var PatternElement in Pattern.Elements do
+        begin
+          if not PatternElement.Style.Visible then
+            Continue;
+          var TilePath := FPatternPath;
+          PatternElement.Path.TransformTo(
+            PatternMatrix * TSvgMatrix.Translation(
+              TileX * Pattern.Width, TileY * Pattern.Height) * PatternElement.Matrix, TilePath);
+          var Opacity := EnsureRange(PatternElement.Style.Opacity, 0, 1);
+          if PatternElement.Style.Fill.Enabled then
+          begin
+            FFillBrush.Kind := TBrushKind.Solid;
+            FFillBrush.Color := AlphaColorWithOpacity(
+              PatternElement.Style.Fill.Color, PatternElement.Style.FillOpacity);
+            PatternBitmap.Canvas.FillPath(TilePath, Opacity, FFillBrush);
+          end;
+          if PatternElement.Style.Stroke.Enabled and (PatternElement.Style.StrokeWidth > 0) then
+          begin
+            var Stroke := FStrokeBrush;
+            Stroke.Kind := TBrushKind.Solid;
+            Stroke.Dash := TStrokeDash.Solid;
+            Stroke.Color := AlphaColorWithOpacity(PatternElement.Style.Stroke.Color,
+              PatternElement.Style.StrokeOpacity);
+            Stroke.Thickness := PatternElement.Style.StrokeWidth *
+              StrokeScale(PatternMatrix * PatternElement.Matrix);
+            Stroke.Cap := PatternElement.Style.StrokeCap;
+            Stroke.Join := PatternElement.Style.StrokeJoin;
+            PatternBitmap.Canvas.DrawPath(TilePath, Opacity, Stroke);
+          end;
+        end;
+  finally
+    PatternBitmap.Canvas.EndScene;
+  end;
+  Result := True;
 end;
 
 procedure TSvgRenderer.RenderMarker(const Canvas: TCanvas; Marker: TSvgMarker; const Position: TPointF; Angle, Scale: Single);
@@ -222,34 +239,28 @@ begin
   if not Marker.Style.Visible then
     Exit;
 
-  var Path := TPathData.Create;
-  try
-    var Matrix := TSvgMatrix.Translation(Position.X, Position.Y) *
-      TSvgMatrix.Rotation(Angle) * TSvgMatrix.Scaling(Scale, Scale) *
-      TSvgMatrix.Translation(-Marker.RefX, -Marker.RefY) * Marker.Matrix;
-    Marker.Path.AppendTo(Path, Matrix);
-    var Opacity := EnsureRange(Marker.Style.Opacity, 0, 1);
-    if Marker.Style.Fill.Enabled then
-    begin
-      Canvas.Fill.Kind := TBrushKind.Solid;
-      Canvas.Fill.Color := AlphaColorWithOpacity(Marker.Style.Fill.Color, Marker.Style.FillOpacity);
-      Canvas.FillPath(Path, Opacity);
-    end;
-    if Marker.Style.Stroke.Enabled and (Marker.Style.StrokeWidth > 0) then
-    begin
-      var Stroke := TStrokeBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
-      try
-        Stroke.Color := AlphaColorWithOpacity(Marker.Style.Stroke.Color, Marker.Style.StrokeOpacity);
-        Stroke.Thickness := Marker.Style.StrokeWidth * Scale;
-        Stroke.Cap := Marker.Style.StrokeCap;
-        Stroke.Join := Marker.Style.StrokeJoin;
-        Canvas.DrawPath(Path, Opacity, Stroke);
-      finally
-        Stroke.Free;
-      end;
-    end;
-  finally
-    Path.Free;
+  var Path := FMarkerPath;
+  var Matrix := TSvgMatrix.Translation(Position.X, Position.Y) *
+    TSvgMatrix.Rotation(Angle) * TSvgMatrix.Scaling(Scale, Scale) *
+    TSvgMatrix.Translation(-Marker.RefX, -Marker.RefY) * Marker.Matrix;
+  Marker.Path.TransformTo(Matrix, Path);
+  var Opacity := EnsureRange(Marker.Style.Opacity, 0, 1);
+  if Marker.Style.Fill.Enabled then
+  begin
+    FFillBrush.Kind := TBrushKind.Solid;
+    FFillBrush.Color := AlphaColorWithOpacity(Marker.Style.Fill.Color, Marker.Style.FillOpacity);
+    Canvas.FillPath(Path, Opacity, FFillBrush);
+  end;
+  if Marker.Style.Stroke.Enabled and (Marker.Style.StrokeWidth > 0) then
+  begin
+    var Stroke := FStrokeBrush;
+    Stroke.Kind := TBrushKind.Solid;
+    Stroke.Dash := TStrokeDash.Solid;
+    Stroke.Color := AlphaColorWithOpacity(Marker.Style.Stroke.Color, Marker.Style.StrokeOpacity);
+    Stroke.Thickness := Marker.Style.StrokeWidth * Scale;
+    Stroke.Cap := Marker.Style.StrokeCap;
+    Stroke.Join := Marker.Style.StrokeJoin;
+    Canvas.DrawPath(Path, Opacity, Stroke);
   end;
 end;
 
@@ -390,10 +401,22 @@ constructor TSvgRenderer.Create;
 begin
   inherited;
   FBitmap := TBitmap.Create(1, 1);
+  FPath := TPathData.Create;
+  FMarkerPath := TPathData.Create;
+  FPatternPath := TPathData.Create;
+  FFillBrush := TBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
+  FStrokeBrush := TStrokeBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
+  FPatternBrushes := TObjectList<TBrush>.Create(True);
 end;
 
 destructor TSvgRenderer.Destroy;
 begin
+  FPatternBrushes.Free;
+  FStrokeBrush.Free;
+  FFillBrush.Free;
+  FPatternPath.Free;
+  FMarkerPath.Free;
+  FPath.Free;
   FBitmap.Free;
   inherited;
 end;
@@ -486,33 +509,46 @@ procedure TSvgRenderer.RenderElement(const Canvas: TCanvas; Element: TSvgElement
       end;
   end;
 
-  function PointOnTextPath(const Points: TList<TPointF>; Distance: Single;
+  function PointOnTextPath(const Points: TList<TPointF>; const Distances: TArray<Double>; Distance: Single;
     out Position, Tangent: TPointF): Boolean;
   var
-    I: Integer;
+    I, LowIndex, HighIndex, MidIndex: Integer;
     A, B: TPointF;
     SegmentLength, Remaining: Single;
   begin
     Result := False;
     if Points.Count < 2 then
       Exit;
-    Remaining := Distance;
-    for I := 1 to Points.Count - 1 do
+    if Distance > Distances[High(Distances)] then
+      Exit;
+    { Locate each glyph in logarithmic time instead of measuring the entire
+      prefix again.  Negative offsets still extrapolate the first segment. }
+    LowIndex := 1;
+    HighIndex := Points.Count - 1;
+    while LowIndex < HighIndex do
+    begin
+      MidIndex := LowIndex + (HighIndex - LowIndex) div 2;
+      if Distances[MidIndex] < Distance then
+        LowIndex := MidIndex + 1
+      else
+        HighIndex := MidIndex;
+    end;
+    I := LowIndex;
+    while I < Points.Count do
     begin
       A := Points[I - 1];
       B := Points[I];
       Tangent := PointF(B.X - A.X, B.Y - A.Y);
       SegmentLength := Hypot(Tangent.X, Tangent.Y);
       if SegmentLength <= 0.0001 then
-        Continue;
-      if Remaining <= SegmentLength then
       begin
-        Position := PointF(A.X + Tangent.X * Remaining / SegmentLength,
-          A.Y + Tangent.Y * Remaining / SegmentLength);
-        Result := True;
-        Exit;
+        Inc(I);
+        Continue;
       end;
-      Remaining := Remaining - SegmentLength;
+      Remaining := Distance - Distances[I - 1];
+      Position := PointF(A.X + Tangent.X * Remaining / SegmentLength,
+        A.Y + Tangent.Y * Remaining / SegmentLength);
+      Exit(True);
     end;
   end;
 
@@ -531,10 +567,18 @@ begin
       var Points := TList<TPointF>.Create;
       try
         BuildTextPath(Element.TextPath.Path, TextMatrix * Element.TextPath.Matrix, Points);
+        var Distances: TArray<Double>;
+        SetLength(Distances, Points.Count);
         var PathLength := 0.0;
         for var I := 1 to Points.Count - 1 do
-          PathLength := PathLength + Hypot(Points[I].X - Points[I - 1].X,
+        begin
+          var SegmentLength: Single := Hypot(Points[I].X - Points[I - 1].X,
             Points[I].Y - Points[I - 1].Y);
+          PathLength := PathLength + SegmentLength;
+          Distances[I] := Distances[I - 1];
+          if SegmentLength > 0.0001 then
+            Distances[I] := Distances[I] + SegmentLength;
+        end;
         var TextScale := Sqrt(Abs(TextMatrix.A * TextMatrix.D - TextMatrix.B * TextMatrix.C));
         if TextScale <= 0 then
           TextScale := 1;
@@ -550,8 +594,25 @@ begin
             PathText := PathText + Run.Text;
         end;
         var TextWidth := 0.0;
-        for var I := 1 to PathText.Length do
-          TextWidth := TextWidth + Canvas.TextWidth(string(PathText[I]));
+        var GlyphMetrics: TArray<TPointF>;
+        SetLength(GlyphMetrics, PathText.Length);
+        var Metrics := TDictionary<Char, TPointF>.Create;
+        try
+          for var I := 1 to PathText.Length do
+          begin
+            var Size: TPointF;
+            if not Metrics.TryGetValue(PathText[I], Size) then
+            begin
+              var GlyphText := string(PathText[I]);
+              Size := PointF(Canvas.TextWidth(GlyphText), Canvas.TextHeight(GlyphText));
+              Metrics.Add(PathText[I], Size);
+            end;
+            GlyphMetrics[I - 1] := Size;
+            TextWidth := TextWidth + Size.X;
+          end;
+        finally
+          Metrics.Free;
+        end;
         var Offset := Element.TextPathStartOffset;
         if Element.TextPathStartOffsetIsPercent then
           Offset := PathLength * Offset / 100
@@ -565,23 +626,20 @@ begin
         begin
           var Glyph := PathText[I];
           var GlyphText := string(Glyph);
-          var GlyphWidth := Canvas.TextWidth(GlyphText);
+          var GlyphWidth := GlyphMetrics[I - 1].X;
           var Position, Tangent: TPointF;
-          if not PointOnTextPath(Points, Offset, Position, Tangent) then
+          if not PointOnTextPath(Points, Distances, Offset, Position, Tangent) then
             Break;
-          var GlyphState := Canvas.SaveState;
-          try
-            Canvas.SetMatrix(TMatrix.CreateRotation(ArcTan2(Tangent.Y, Tangent.X)) *
-              TMatrix.CreateTranslation(Position.X, Position.Y));
-            var GlyphHeight := Canvas.TextHeight(GlyphText);
-            var GlyphRect := RectF(0, -GlyphHeight + FontSize * 0.22,
-              GlyphWidth, FontSize * 0.22);
-            Canvas.FillText(GlyphRect, GlyphText, False,
-              EnsureRange(Element.Style.Opacity, 0, 1), [], TTextAlign.Leading,
-              TTextAlign.Trailing);
-          finally
-            Canvas.RestoreState(GlyphState);
-          end;
+          { Only the matrix changes for each glyph.  The enclosing TextState
+            restores the font, brush and matrix once for the whole element. }
+          Canvas.SetMatrix(TMatrix.CreateRotation(ArcTan2(Tangent.Y, Tangent.X)) *
+            TMatrix.CreateTranslation(Position.X, Position.Y));
+          var GlyphHeight := GlyphMetrics[I - 1].Y;
+          var GlyphRect := RectF(0, -GlyphHeight + FontSize * 0.22,
+            GlyphWidth, FontSize * 0.22);
+          Canvas.FillText(GlyphRect, GlyphText, False,
+            EnsureRange(Element.Style.Opacity, 0, 1), [], TTextAlign.Leading,
+            TTextAlign.Trailing);
           Offset := Offset + GlyphWidth;
         end;
       finally
@@ -711,253 +769,250 @@ begin
     end;
     Exit;
   end;
-  var Path := TPathData.Create;
-  try
-    Element.Path.AppendTo(Path, ViewMatrix * Element.Matrix);
-    var Opacity := EnsureRange(Element.Style.Opacity, 0, 1);
-    if Element.Style.Fill.Enabled then
+  if Element.Path.Commands.Count = 0 then
+    Exit;
+  var Path := FPath;
+  var ElementMatrix := ViewMatrix * Element.Matrix;
+  Element.Path.TransformTo(ElementMatrix, Path);
+  var Opacity := EnsureRange(Element.Style.Opacity, 0, 1);
+  if Element.Style.Fill.Enabled then
+  begin
+    var Brush := FFillBrush;
+    Brush.Kind := TBrushKind.Solid;
+    var Definition: TSvgGradient;
+    var Pattern: TSvgPattern;
+    if not Element.Style.Fill.PatternID.IsEmpty and
+      FDocument.Patterns.TryGetValue(Element.Style.Fill.PatternID, Pattern) then
     begin
-      var Brush := TBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
-      try
-        var Definition: TSvgGradient;
-        var Pattern: TSvgPattern;
-        if not Element.Style.Fill.PatternID.IsEmpty and
-          FDocument.Patterns.TryGetValue(Element.Style.Fill.PatternID, Pattern) then
+      var PatternBrush: TBrush;
+      if RenderPattern(Pattern, Element, ViewMatrix, Path.GetBounds, PatternBrush) then
+        Canvas.FillPath(Path, Opacity, PatternBrush);
+    end
+    else if not Element.Style.Fill.GradientID.IsEmpty and FDocument.Gradients.TryGetValue(Element.Style.Fill.GradientID, Definition) then
+    begin
+      var Bounds := Path.GetBounds;
+      Brush.Kind := TBrushKind.Gradient;
+      if Definition.Kind = sgRadial then
+      begin
+        Brush.Gradient.Style := TGradientStyle.Radial;
+        { TCanvasD2D defines the radial brush center relative to its bounds,
+          but applies only the transform matrix to the brush. Translate the
+          brush into the path bounds so the normalized center maps to the
+          same canvas coordinates on every FMX backend. }
+        Brush.Gradient.RadialTransform.Position.Point := Bounds.TopLeft;
+        if Definition.UnitsUserSpace then
         begin
-          RenderPattern(Canvas, Pattern, Element, ViewMatrix, Path.GetBounds);
-          Canvas.FillPath(Path, Opacity);
+          var GradientMatrix := ElementMatrix * Definition.Matrix;
+          var P := GradientMatrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
+          Brush.Gradient.RadialTransform.RotationCenter.Point := PointF((P.X - Bounds.Left) / Bounds.Width, (P.Y - Bounds.Top) / Bounds.Height);
+          Brush.Gradient.RadialTransform.RotationAngle := RadToDeg(ArcTan2(GradientMatrix.B, GradientMatrix.A));
+          Brush.Gradient.RadialTransform.Scale.X := Definition.Radius *
+            Sqrt(Sqr(GradientMatrix.A) + Sqr(GradientMatrix.B)) / Max(Bounds.Width / 2, 0.0001);
+          Brush.Gradient.RadialTransform.Scale.Y := Definition.Radius *
+            Sqrt(Sqr(GradientMatrix.C) + Sqr(GradientMatrix.D)) / Max(Bounds.Height / 2, 0.0001);
         end
-        else if not Element.Style.Fill.GradientID.IsEmpty and FDocument.Gradients.TryGetValue(Element.Style.Fill.GradientID, Definition) then
+        else
         begin
-          var Bounds := Path.GetBounds;
-          Brush.Kind := TBrushKind.Gradient;
-          if Definition.Kind = sgRadial then
-          begin
-            Brush.Gradient.Style := TGradientStyle.Radial;
-            { TCanvasD2D defines the radial brush center relative to its bounds,
-              but applies only the transform matrix to the brush. Translate the
-              brush into the path bounds so the normalized center maps to the
-              same canvas coordinates on every FMX backend. }
-            Brush.Gradient.RadialTransform.Position.Point := Bounds.TopLeft;
-            if Definition.UnitsUserSpace then
-            begin
-              var GradientMatrix := ViewMatrix * Element.Matrix * Definition.Matrix;
-              var P := GradientMatrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
-              Brush.Gradient.RadialTransform.RotationCenter.Point := PointF((P.X - Bounds.Left) / Bounds.Width, (P.Y - Bounds.Top) / Bounds.Height);
-              Brush.Gradient.RadialTransform.RotationAngle := RadToDeg(ArcTan2(GradientMatrix.B, GradientMatrix.A));
-              Brush.Gradient.RadialTransform.Scale.X := Definition.Radius *
-                Sqrt(Sqr(GradientMatrix.A) + Sqr(GradientMatrix.B)) / Max(Bounds.Width / 2, 0.0001);
-              Brush.Gradient.RadialTransform.Scale.Y := Definition.Radius *
-                Sqrt(Sqr(GradientMatrix.C) + Sqr(GradientMatrix.D)) / Max(Bounds.Height / 2, 0.0001);
-            end
-            else
-            begin
-              Brush.Gradient.RadialTransform.RotationCenter.Point := Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
-              Brush.Gradient.RadialTransform.RotationAngle :=
-                RadToDeg(ArcTan2(Definition.Matrix.B, Definition.Matrix.A));
-              Brush.Gradient.RadialTransform.Scale.X := 2 * Definition.Radius *
-                Sqrt(Sqr(Definition.Matrix.A) + Sqr(Definition.Matrix.B));
-              Brush.Gradient.RadialTransform.Scale.Y := 2 * Definition.Radius *
-                Sqrt(Sqr(Definition.Matrix.C) + Sqr(Definition.Matrix.D));
-            end;
-          end
-          else
-          begin
-            Brush.Gradient.Style := TGradientStyle.Linear;
-            if Definition.UnitsUserSpace then
-            begin
-              var StartPoint := (ViewMatrix * Element.Matrix * Definition.Matrix).TransformPoint(PointF(Definition.X1, Definition.Y1));
-              var StopPoint := (ViewMatrix * Element.Matrix * Definition.Matrix).TransformPoint(PointF(Definition.X2, Definition.Y2));
-              Brush.Gradient.StartPosition.Point := PointF((StartPoint.X - Bounds.Left) / Bounds.Width, (StartPoint.Y - Bounds.Top) / Bounds.Height);
-              Brush.Gradient.StopPosition.Point := PointF((StopPoint.X - Bounds.Left) / Bounds.Width, (StopPoint.Y - Bounds.Top) / Bounds.Height);
-            end
-            else
-            begin
-              var StartPosition, StopPosition: TPointF;
-              ObjectBoundingBoxLinearGradientPositions(Definition, Bounds,
-                StartPosition, StopPosition);
-              Brush.Gradient.StartPosition.Point := StartPosition;
-              Brush.Gradient.StopPosition.Point := StopPosition;
-            end;
-          end;
-          Brush.Gradient.Points.Clear;
-          if (Definition.Kind = sgLinear) and not Definition.UnitsUserSpace and
-            (Definition.Spread <> sgsPad) then
-          begin
-            var DX := Definition.X2 - Definition.X1;
-            var DY := Definition.Y2 - Definition.Y1;
-            var LengthSquared := Sqr(DX) + Sqr(DY);
-            if LengthSquared > 0.000001 then
-            begin
-              var MinT := Min(Min((-Definition.X1 * DX - Definition.Y1 * DY) / LengthSquared,
-                  ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
-                Min((-Definition.X1 * DX + (1 - Definition.Y1) * DY) / LengthSquared,
-                  ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
-              var MaxT := Max(Max((-Definition.X1 * DX - Definition.Y1 * DY) / LengthSquared,
-                  ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
-                Max((-Definition.X1 * DX + (1 - Definition.Y1) * DY) / LengthSquared,
-                  ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
-              var Range := MaxT - MinT;
-              Brush.Gradient.StartPosition.Point := Definition.Matrix.TransformPoint(
-                PointF(Definition.X1 + DX * MinT, Definition.Y1 + DY * MinT));
-              Brush.Gradient.StopPosition.Point := Definition.Matrix.TransformPoint(
-                PointF(Definition.X1 + DX * MaxT, Definition.Y1 + DY * MaxT));
-              for var Cycle := Floor(MinT) to Ceil(MaxT) do
-                for var I := 0 to Definition.Gradient.Points.Count - 1 do
-                begin
-                  var SourceIndex := I;
-                  var Position := Definition.Gradient.Points[I].Offset;
-                  if (Definition.Spread = sgsReflect) and Odd(Cycle) then
-                  begin
-                    SourceIndex := Definition.Gradient.Points.Count - 1 - I;
-                    Position := 1 - Definition.Gradient.Points[SourceIndex].Offset;
-                  end;
-                  var Target := TGradientPoint(Brush.Gradient.Points.Add);
-                  Target.Offset := (Cycle + Position - MinT) / Range;
-                  Target.Color := AlphaColorWithOpacity(
-                    Definition.Gradient.Points[SourceIndex].Color, Element.Style.FillOpacity);
-                end;
-            end;
-          end;
-          if Brush.Gradient.Points.Count = 0 then
+          Brush.Gradient.RadialTransform.RotationCenter.Point := Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
+          Brush.Gradient.RadialTransform.RotationAngle :=
+            RadToDeg(ArcTan2(Definition.Matrix.B, Definition.Matrix.A));
+          Brush.Gradient.RadialTransform.Scale.X := 2 * Definition.Radius *
+            Sqrt(Sqr(Definition.Matrix.A) + Sqr(Definition.Matrix.B));
+          Brush.Gradient.RadialTransform.Scale.Y := 2 * Definition.Radius *
+            Sqrt(Sqr(Definition.Matrix.C) + Sqr(Definition.Matrix.D));
+        end;
+      end
+      else
+      begin
+        Brush.Gradient.Style := TGradientStyle.Linear;
+        if Definition.UnitsUserSpace then
+        begin
+          var StartPoint := (ElementMatrix * Definition.Matrix).TransformPoint(PointF(Definition.X1, Definition.Y1));
+          var StopPoint := (ElementMatrix * Definition.Matrix).TransformPoint(PointF(Definition.X2, Definition.Y2));
+          Brush.Gradient.StartPosition.Point := PointF((StartPoint.X - Bounds.Left) / Bounds.Width, (StartPoint.Y - Bounds.Top) / Bounds.Height);
+          Brush.Gradient.StopPosition.Point := PointF((StopPoint.X - Bounds.Left) / Bounds.Width, (StopPoint.Y - Bounds.Top) / Bounds.Height);
+        end
+        else
+        begin
+          var StartPosition, StopPosition: TPointF;
+          ObjectBoundingBoxLinearGradientPositions(Definition, Bounds,
+            StartPosition, StopPosition);
+          Brush.Gradient.StartPosition.Point := StartPosition;
+          Brush.Gradient.StopPosition.Point := StopPosition;
+        end;
+      end;
+      Brush.Gradient.Points.Clear;
+      if (Definition.Kind = sgLinear) and not Definition.UnitsUserSpace and
+        (Definition.Spread <> sgsPad) then
+      begin
+        var DX := Definition.X2 - Definition.X1;
+        var DY := Definition.Y2 - Definition.Y1;
+        var LengthSquared := Sqr(DX) + Sqr(DY);
+        if LengthSquared > 0.000001 then
+        begin
+          var MinT := Min(Min((-Definition.X1 * DX - Definition.Y1 * DY) / LengthSquared,
+              ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
+            Min((-Definition.X1 * DX + (1 - Definition.Y1) * DY) / LengthSquared,
+              ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
+          var MaxT := Max(Max((-Definition.X1 * DX - Definition.Y1 * DY) / LengthSquared,
+              ((1 - Definition.X1) * DX - Definition.Y1 * DY) / LengthSquared),
+            Max((-Definition.X1 * DX + (1 - Definition.Y1) * DY) / LengthSquared,
+              ((1 - Definition.X1) * DX + (1 - Definition.Y1) * DY) / LengthSquared));
+          var Range := MaxT - MinT;
+          Brush.Gradient.StartPosition.Point := Definition.Matrix.TransformPoint(
+            PointF(Definition.X1 + DX * MinT, Definition.Y1 + DY * MinT));
+          Brush.Gradient.StopPosition.Point := Definition.Matrix.TransformPoint(
+            PointF(Definition.X1 + DX * MaxT, Definition.Y1 + DY * MaxT));
+          for var Cycle := Floor(MinT) to Ceil(MaxT) do
             for var I := 0 to Definition.Gradient.Points.Count - 1 do
             begin
               var SourceIndex := I;
-              if Definition.Kind = sgRadial then
+              var Position := Definition.Gradient.Points[I].Offset;
+              if (Definition.Spread = sgsReflect) and Odd(Cycle) then
+              begin
                 SourceIndex := Definition.Gradient.Points.Count - 1 - I;
-              var Source := Definition.Gradient.Points[SourceIndex];
+                Position := 1 - Definition.Gradient.Points[SourceIndex].Offset;
+              end;
               var Target := TGradientPoint(Brush.Gradient.Points.Add);
-              if Definition.Kind = sgRadial then
-                Target.Offset := 1 - Source.Offset
-              else
-                Target.Offset := Source.Offset;
-              Target.Color := AlphaColorWithOpacity(Source.Color, Element.Style.FillOpacity);
+              Target.Offset := (Cycle + Position - MinT) / Range;
+              Target.Color := AlphaColorWithOpacity(
+                Definition.Gradient.Points[SourceIndex].Color, Element.Style.FillOpacity);
             end;
-          Canvas.FillPath(Path, Opacity, Brush);
-        end
-        else if Element.Style.Fill.GradientID.IsEmpty then
-        begin
-          Brush.Color := AlphaColorWithOpacity(Element.Style.Fill.Color, Element.Style.FillOpacity);
-          Canvas.FillPath(Path, Opacity, Brush);
         end;
-      finally
-        Brush.Free;
       end;
-    end;
-    if Element.Style.Stroke.Enabled and (Element.Style.StrokeWidth > 0) then
-    begin
-      var Stroke := TStrokeBrush.Create(TBrushKind.Solid, TAlphaColorRec.Null);
-      try
-        var Definition: TSvgGradient;
-        if not Element.Style.Stroke.GradientID.IsEmpty and
-          FDocument.Gradients.TryGetValue(Element.Style.Stroke.GradientID, Definition) then
+      if Brush.Gradient.Points.Count = 0 then
+        for var I := 0 to Definition.Gradient.Points.Count - 1 do
         begin
-          var Bounds := Path.GetBounds;
-          Stroke.Kind := TBrushKind.Gradient;
+          var SourceIndex := I;
           if Definition.Kind = sgRadial then
-          begin
-            Stroke.Gradient.Style := TGradientStyle.Radial;
-            Stroke.Gradient.RadialTransform.Position.Point := Bounds.TopLeft;
-            if Definition.UnitsUserSpace then
-            begin
-              var GradientMatrix := ViewMatrix * Element.Matrix * Definition.Matrix;
-              var P := GradientMatrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
-              Stroke.Gradient.RadialTransform.RotationCenter.Point :=
-                PointF((P.X - Bounds.Left) / Bounds.Width, (P.Y - Bounds.Top) / Bounds.Height);
-              Stroke.Gradient.RadialTransform.RotationAngle :=
-                RadToDeg(ArcTan2(GradientMatrix.B, GradientMatrix.A));
-              Stroke.Gradient.RadialTransform.Scale.X := Definition.Radius *
-                Sqrt(Sqr(GradientMatrix.A) + Sqr(GradientMatrix.B)) / Max(Bounds.Width / 2, 0.0001);
-              Stroke.Gradient.RadialTransform.Scale.Y := Definition.Radius *
-                Sqrt(Sqr(GradientMatrix.C) + Sqr(GradientMatrix.D)) / Max(Bounds.Height / 2, 0.0001);
-            end
-            else
-            begin
-              Stroke.Gradient.RadialTransform.RotationCenter.Point :=
-                Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
-              Stroke.Gradient.RadialTransform.RotationAngle :=
-                RadToDeg(ArcTan2(Definition.Matrix.B, Definition.Matrix.A));
-              Stroke.Gradient.RadialTransform.Scale.X := 2 * Definition.Radius *
-                Sqrt(Sqr(Definition.Matrix.A) + Sqr(Definition.Matrix.B));
-              Stroke.Gradient.RadialTransform.Scale.Y := 2 * Definition.Radius *
-                Sqrt(Sqr(Definition.Matrix.C) + Sqr(Definition.Matrix.D));
-            end;
-          end
+            SourceIndex := Definition.Gradient.Points.Count - 1 - I;
+          var Source := Definition.Gradient.Points[SourceIndex];
+          var Target := TGradientPoint(Brush.Gradient.Points.Add);
+          if Definition.Kind = sgRadial then
+            Target.Offset := 1 - Source.Offset
           else
-          begin
-            Stroke.Gradient.Style := TGradientStyle.Linear;
-            if Definition.UnitsUserSpace then
-            begin
-              var StartPoint := (ViewMatrix * Element.Matrix * Definition.Matrix).
-                TransformPoint(PointF(Definition.X1, Definition.Y1));
-              var StopPoint := (ViewMatrix * Element.Matrix * Definition.Matrix).
-                TransformPoint(PointF(Definition.X2, Definition.Y2));
-              Stroke.Gradient.StartPosition.Point :=
-                PointF((StartPoint.X - Bounds.Left) / Bounds.Width,
-                (StartPoint.Y - Bounds.Top) / Bounds.Height);
-              Stroke.Gradient.StopPosition.Point :=
-                PointF((StopPoint.X - Bounds.Left) / Bounds.Width,
-                (StopPoint.Y - Bounds.Top) / Bounds.Height);
-            end
-            else
-            begin
-              var StartPosition, StopPosition: TPointF;
-              ObjectBoundingBoxLinearGradientPositions(Definition, Bounds,
-                StartPosition, StopPosition);
-              Stroke.Gradient.StartPosition.Point := StartPosition;
-              Stroke.Gradient.StopPosition.Point := StopPosition;
-            end;
-          end;
-          Stroke.Gradient.Points.Clear;
-          for var I := 0 to Definition.Gradient.Points.Count - 1 do
-          begin
-            var SourceIndex := I;
-            if Definition.Kind = sgRadial then
-              SourceIndex := Definition.Gradient.Points.Count - 1 - I;
-            var Source := Definition.Gradient.Points[SourceIndex];
-            var Target := TGradientPoint(Stroke.Gradient.Points.Add);
-            if Definition.Kind = sgRadial then
-              Target.Offset := 1 - Source.Offset
-            else
-              Target.Offset := Source.Offset;
-            Target.Color := AlphaColorWithOpacity(Source.Color, Element.Style.StrokeOpacity);
-          end;
+            Target.Offset := Source.Offset;
+          Target.Color := AlphaColorWithOpacity(Source.Color, Element.Style.FillOpacity);
+        end;
+      Canvas.FillPath(Path, Opacity, Brush);
+    end
+    else if Element.Style.Fill.GradientID.IsEmpty then
+    begin
+      Brush.Color := AlphaColorWithOpacity(Element.Style.Fill.Color, Element.Style.FillOpacity);
+      Canvas.FillPath(Path, Opacity, Brush);
+    end;
+  end;
+  if Element.Style.Stroke.Enabled and (Element.Style.StrokeWidth > 0) then
+  begin
+    var Stroke := FStrokeBrush;
+    Stroke.Kind := TBrushKind.Solid;
+    Stroke.Dash := TStrokeDash.Solid;
+    var Definition: TSvgGradient;
+    if not Element.Style.Stroke.GradientID.IsEmpty and
+      FDocument.Gradients.TryGetValue(Element.Style.Stroke.GradientID, Definition) then
+    begin
+      var Bounds := Path.GetBounds;
+      Stroke.Kind := TBrushKind.Gradient;
+      if Definition.Kind = sgRadial then
+      begin
+        Stroke.Gradient.Style := TGradientStyle.Radial;
+        Stroke.Gradient.RadialTransform.Position.Point := Bounds.TopLeft;
+        if Definition.UnitsUserSpace then
+        begin
+          var GradientMatrix := ElementMatrix * Definition.Matrix;
+          var P := GradientMatrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
+          Stroke.Gradient.RadialTransform.RotationCenter.Point :=
+            PointF((P.X - Bounds.Left) / Bounds.Width, (P.Y - Bounds.Top) / Bounds.Height);
+          Stroke.Gradient.RadialTransform.RotationAngle :=
+            RadToDeg(ArcTan2(GradientMatrix.B, GradientMatrix.A));
+          Stroke.Gradient.RadialTransform.Scale.X := Definition.Radius *
+            Sqrt(Sqr(GradientMatrix.A) + Sqr(GradientMatrix.B)) / Max(Bounds.Width / 2, 0.0001);
+          Stroke.Gradient.RadialTransform.Scale.Y := Definition.Radius *
+            Sqrt(Sqr(GradientMatrix.C) + Sqr(GradientMatrix.D)) / Max(Bounds.Height / 2, 0.0001);
         end
         else
-          Stroke.Color := AlphaColorWithOpacity(Element.Style.Stroke.Color, Element.Style.StrokeOpacity);
-        Stroke.Thickness := Element.Style.StrokeWidth *
-          StrokeScale(ViewMatrix * Element.Matrix);
-        Stroke.Cap := Element.Style.StrokeCap;
-        Stroke.Join := Element.Style.StrokeJoin;
-        if Length(Element.Style.DashArray) > 0 then
         begin
-          var DashArray: TArray<Single>;
-          SetLength(DashArray, Length(Element.Style.DashArray));
-          for var I := 0 to High(DashArray) do
-            { FMX stores dash lengths as multiples of the pen width.  Keep
-              the SVG ratio here: the scaled pen thickness then scales both
-              the dashes and their offset in canvas pixels. }
-            DashArray[I] := Element.Style.DashArray[I] / Element.Style.StrokeWidth;
-          Stroke.SetCustomDash(DashArray,
-            Element.Style.DashOffset / Element.Style.StrokeWidth);
+          Stroke.Gradient.RadialTransform.RotationCenter.Point :=
+            Definition.Matrix.TransformPoint(PointF(Definition.X1, Definition.Y1));
+          Stroke.Gradient.RadialTransform.RotationAngle :=
+            RadToDeg(ArcTan2(Definition.Matrix.B, Definition.Matrix.A));
+          Stroke.Gradient.RadialTransform.Scale.X := 2 * Definition.Radius *
+            Sqrt(Sqr(Definition.Matrix.A) + Sqr(Definition.Matrix.B));
+          Stroke.Gradient.RadialTransform.Scale.Y := 2 * Definition.Radius *
+            Sqrt(Sqr(Definition.Matrix.C) + Sqr(Definition.Matrix.D));
         end;
-        Canvas.DrawPath(Path, Opacity, Stroke);
-      finally
-        Stroke.Free;
+      end
+      else
+      begin
+        Stroke.Gradient.Style := TGradientStyle.Linear;
+        if Definition.UnitsUserSpace then
+        begin
+          var StartPoint := (ElementMatrix * Definition.Matrix).
+            TransformPoint(PointF(Definition.X1, Definition.Y1));
+          var StopPoint := (ElementMatrix * Definition.Matrix).
+            TransformPoint(PointF(Definition.X2, Definition.Y2));
+          Stroke.Gradient.StartPosition.Point :=
+            PointF((StartPoint.X - Bounds.Left) / Bounds.Width,
+            (StartPoint.Y - Bounds.Top) / Bounds.Height);
+          Stroke.Gradient.StopPosition.Point :=
+            PointF((StopPoint.X - Bounds.Left) / Bounds.Width,
+            (StopPoint.Y - Bounds.Top) / Bounds.Height);
+        end
+        else
+        begin
+          var StartPosition, StopPosition: TPointF;
+          ObjectBoundingBoxLinearGradientPositions(Definition, Bounds,
+            StartPosition, StopPosition);
+          Stroke.Gradient.StartPosition.Point := StartPosition;
+          Stroke.Gradient.StopPosition.Point := StopPosition;
+        end;
       end;
+      Stroke.Gradient.Points.Clear;
+      for var I := 0 to Definition.Gradient.Points.Count - 1 do
+      begin
+        var SourceIndex := I;
+        if Definition.Kind = sgRadial then
+          SourceIndex := Definition.Gradient.Points.Count - 1 - I;
+        var Source := Definition.Gradient.Points[SourceIndex];
+        var Target := TGradientPoint(Stroke.Gradient.Points.Add);
+        if Definition.Kind = sgRadial then
+          Target.Offset := 1 - Source.Offset
+        else
+          Target.Offset := Source.Offset;
+        Target.Color := AlphaColorWithOpacity(Source.Color, Element.Style.StrokeOpacity);
+      end;
+    end
+    else
+      Stroke.Color := AlphaColorWithOpacity(Element.Style.Stroke.Color, Element.Style.StrokeOpacity);
+    Stroke.Thickness := Element.Style.StrokeWidth *
+      StrokeScale(ElementMatrix);
+    Stroke.Cap := Element.Style.StrokeCap;
+    Stroke.Join := Element.Style.StrokeJoin;
+    if Length(Element.Style.DashArray) > 0 then
+    begin
+      var DashArray: TArray<Single>;
+      SetLength(DashArray, Length(Element.Style.DashArray));
+      for var I := 0 to High(DashArray) do
+        { FMX stores dash lengths as multiples of the pen width.  Keep
+          the SVG ratio here: the scaled pen thickness then scales both
+          the dashes and their offset in canvas pixels. }
+        DashArray[I] := Element.Style.DashArray[I] / Element.Style.StrokeWidth;
+      Stroke.SetCustomDash(DashArray,
+        Element.Style.DashOffset / Element.Style.StrokeWidth);
     end;
-    RenderMidMarkers(Canvas, Element, ViewMatrix);
-  finally
-    Path.Free;
+    Canvas.DrawPath(Path, Opacity, Stroke);
   end;
+  RenderMidMarkers(Canvas, Element, ViewMatrix);
 end;
 
 procedure TSvgRenderer.Rasterize(ADocument: TSvgDocument; AWidth, AHeight, ARenderScale: Single);
 begin
   FDocument := ADocument;
   FRenderScale := ARenderScale;
+  FPatternBrushIndex := 0;
   FBitmap.SetSize(Max(1, Ceil(AWidth * ARenderScale)), Max(1, Ceil(AHeight * ARenderScale)));
-  FBitmap.Canvas.BeginScene;
+  if not FBitmap.Canvas.BeginScene then
+    raise EInvalidOperation.Create('Cannot begin SVG raster scene');
   try
     FBitmap.Canvas.Clear(TAlphaColorRec.Null);
     var Matrix := GetContentMatrix;
@@ -965,6 +1020,9 @@ begin
       RenderElement(FBitmap.Canvas, Element, Matrix);
   finally
     FBitmap.Canvas.EndScene;
+    { Drop slots unused by this document so old pattern bitmaps do not linger. }
+    while FPatternBrushes.Count > FPatternBrushIndex do
+      FPatternBrushes.Delete(FPatternBrushes.Count - 1);
   end;
 end;
 

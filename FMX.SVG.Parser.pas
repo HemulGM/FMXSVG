@@ -14,7 +14,7 @@ type
     FPos: Integer;
     procedure SkipSeparators;
   public
-    class function Create(const S: string): TSvgNumberParser; static;
+    class function Create(const S: string; StartPosition: Integer = 1): TSvgNumberParser; static;
     function ReadNumber(out Value: Single): Boolean;
     function ReadFlag(out Value: Integer): Boolean;
     function Position: Integer;
@@ -169,10 +169,10 @@ end;
 
 { TSvgNumberParser }
 
-class function TSvgNumberParser.Create(const S: string): TSvgNumberParser;
+class function TSvgNumberParser.Create(const S: string; StartPosition: Integer): TSvgNumberParser;
 begin
   Result.FText := S;
-  Result.FPos := 1;
+  Result.FPos := EnsureRange(StartPosition, 1, S.Length + 1);
 end;
 
 procedure TSvgNumberParser.SkipSeparators;
@@ -298,18 +298,20 @@ end;
 
 function TSvgPathParser.ReadNumber(out Value: Single): Boolean;
 begin
-  var Parser := TSvgNumberParser.Create(FText.Substring(FPos - 1));
+  { Keep the original string and an absolute cursor. Copying its remaining
+    suffix for every coordinate makes long path parsing quadratic. }
+  var Parser := TSvgNumberParser.Create(FText, FPos);
   Result := Parser.ReadNumber(Value);
   if Result then
-    FPos := FPos + Parser.Position - 1;
+    FPos := Parser.Position;
 end;
 
 function TSvgPathParser.ReadFlag(out Value: Integer): Boolean;
 begin
-  var Parser := TSvgNumberParser.Create(FText.Substring(FPos - 1));
+  var Parser := TSvgNumberParser.Create(FText, FPos);
   Result := Parser.ReadFlag(Value);
   if Result then
-    FPos := FPos + Parser.Position - 1;
+    FPos := Parser.Position;
 end;
 
 function TSvgPathParser.ReadPoint(out P: TPointF): Boolean;
@@ -657,6 +659,7 @@ begin
     if FPos > FText.Length then
       Break;
 
+    var PreviousPos := FPos;
     var Command := FText[FPos];
     if IsCommandChar(Command) then
     begin
@@ -714,6 +717,10 @@ begin
       'Z', 'z':
         ParseClose;
     end;
+    { Incomplete numbers and unknown characters must not keep the parser at
+      the same cursor forever while an SVG is being edited. }
+    if FPos <= PreviousPos then
+      Inc(FPos);
   end;
 end;
 
