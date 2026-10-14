@@ -33,6 +33,7 @@ begin
   FSVG := TSVGRender.Create(Self);
   FSVG.Parent := LayoutSVG;
   FSVG.Align := TAlignLayout.Client;
+  MemoSVGChange(nil);
 end;
 
 procedure TFormMain.MemoSVGChange(Sender: TObject);
